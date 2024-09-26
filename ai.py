@@ -40,12 +40,16 @@ def loss_fn(probs: Tensor, outcome: int, gamma: float = 0.95) -> Tensor:
     reward = dict_of_reward[outcome]
 
     # we calculate the loss in a very vectorized way
-    discount_factors = torch.arange(len(probs), 0, -1)  # [n, n-1, ... , 0]
+    num_moves = len(probs)
+    discount_factors = torch.tensor([gamma**i for i in range(num_moves)])
     discounted_rewards = discount_factors * gamma * reward
     loss = torch.sum(discounted_rewards * probs)  # element-wise product
 
     # higher loss should indicate worse performance
     loss = -loss
+
+    # we also want to normalize the loss
+    loss = loss / num_moves
 
     return loss
 
