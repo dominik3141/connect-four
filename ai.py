@@ -33,7 +33,6 @@ def loss_fn(probs: Tensor, outcome: int, gamma: float = 0.95) -> Tensor:
         1: -5.0,  # Player 1 won (undesirable)I
         2: 4.0,  # Player 2 won (AI won, desirable)
         3: -2.0,  # Stalemate (slightly undesirable)
-        4: -9.0,  # Illegal move by AI (highly undesirable)
     }
 
     # calculate the reward
@@ -56,22 +55,21 @@ def loss_fn(probs: Tensor, outcome: int, gamma: float = 0.95) -> Tensor:
 
 def get_next_move(model: DecisionModel, board: ConnectFour) -> Tuple[Move, Tensor]:
     """
-    Return the move and the probability of the move.
+    Return the move and the probability of the move, ensuring only legal moves are selected.
     """
-    # we need to convert the current board state to a tensor
-    state_tensor = (
-        Tensor(board.state).view(7 * 6).float()
-    )  # should be easy with a numpy array
+    state_tensor = torch.Tensor(board.state).view(7 * 6).float()
+    logits = model(state_tensor)
 
-    # ask the model what to do
-    logits = model(state_tensor)  # is of form [column_1, ..., column_7]
-    probs = F.softmax(logits, dim=-1)  # probabilities should some to one
+    # Create a mask for legal moves
+    legal_moves = torch.Tensor([engine.is_legal(board, move) for move in range(7)])
 
-    # select an action according to probability
+    # Set logits of illegal moves to a large negative number
+    masked_logits = torch.where(legal_moves == 1, logits, torch.tensor(-1e9))
+
+    probs = F.softmax(masked_logits, dim=-1)
+
     distribution = Categorical(probs)
     move = distribution.sample()
-
-    # look up the probability of the selected move
     probability = probs[move]
 
     return move, probability
@@ -110,16 +108,26 @@ def play_against_random_player(model: DecisionModel) -> Tuple[Tensor, int]:
     return ai_move_probs_tensor, status
 
 
+def train_model(
+    iterations: int, learning_rate: float = 0.01, model: DecisionModel = None
+) -> DecisionModel:
+    if model is None:
+        model = DecisionModel()
+
+    # for now without batching
+    for i in range(iterations):
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        optimizer.zero_grad()
+
+        ai_move_probs_tensor, status = play_against_random_player(model)
+        loss = loss_fn(ai_move_probs_tensor, status)
+        print(f"Loss: {loss}")
+
+        loss.backward()
+        optimizer.step()
+
+    return model
+
+
 if __name__ == "__main__":
-    model = DecisionModel()
-
-    # learn from the past game
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-    optimizer.zero_grad()
-
-    ai_move_probs_tensor, status = play_against_random_player(model)
-    loss = loss_fn(ai_move_probs_tensor, status)
-    print(f"Loss: {loss}")
-
-    loss.backward()
-    optimizer.step()
+    model = train_model(100)

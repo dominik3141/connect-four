@@ -51,7 +51,8 @@ def random_move(board: ConnectFour) -> Move:
 
     # Just to make sure, we also check if the move is legal
     if not is_legal(board, move):
-        raise ValueError("Tried to choose an illegal move")
+        # retry
+        return random_move(board)
 
     return move
 
