@@ -60,8 +60,8 @@ def get_next_move(model: DecisionModel, board: ConnectFour) -> Tuple[Move, Tenso
     state_tensor = torch.Tensor(board.state).view(7 * 6).float()
     logits = model(state_tensor)
 
-    # Create a mask for legal moves
-    legal_moves = torch.Tensor([engine.is_legal(board, move) for move in range(7)])
+    # Create a mask for legal moves, explicitly converting to int
+    legal_moves = torch.Tensor([int(engine.is_legal(board, move)) for move in range(7)])
 
     # Set logits of illegal moves to a large negative number
     masked_logits = torch.where(legal_moves == 1, logits, torch.tensor(-1e9))
@@ -100,7 +100,6 @@ def play_against_random_player(model: DecisionModel) -> Tuple[Tensor, int]:
             break
 
     status = engine.is_in_terminal_state(board)
-    print(f"Game over after {i} moves, status: {status}")
 
     ai_move_probs.reverse()
     ai_move_probs_tensor = torch.stack(ai_move_probs)
@@ -121,7 +120,6 @@ def train_model(
 
         ai_move_probs_tensor, status = play_against_random_player(model)
         loss = loss_fn(ai_move_probs_tensor, status)
-        print(f"Loss: {loss}")
 
         loss.backward()
         optimizer.step()
@@ -129,5 +127,24 @@ def train_model(
     return model
 
 
+def evaluate_model(model: DecisionModel, iterations: int = 100) -> float:
+    # return the ratio of wins for the model
+    wins = 0
+    for i in range(iterations):
+        _, status = play_against_random_player(model)
+        if status == 2:
+            wins += 1
+    return wins / iterations
+
+
 if __name__ == "__main__":
-    model = train_model(100)
+    model = DecisionModel()
+
+    # evaluate the untrained model
+    print(f"Model evaluation before training: {evaluate_model(model)}")
+
+    # train the model
+    model = train_model(500, model=model)
+
+    # evaluate the trained model
+    print(f"Model evaluation after training: {evaluate_model(model)}")
