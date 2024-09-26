@@ -73,34 +73,49 @@ def get_next_move(model: DecisionModel, board: ConnectFour) -> Tuple[Move, Tenso
     return move, probability
 
 
-def game_over(board: ConnectFour) -> bool:
+def self_play(model: DecisionModel) -> DecisionModel:
+    pass
+
+
+def play_against_random_player(model: DecisionModel) -> Tuple[Tensor, int]:
+    board = ConnectFour()
+
+    i = 0
+    ai_move_probs = []
+    while True:
+        i += 1
+        move = engine.random_move(board)
+        board = engine.make_move(board, 1, move)
+
+        if engine.is_in_terminal_state(board) != 0:
+            break
+
+        move, prob = get_next_move(model, board)
+        board = engine.make_move(board, 2, move)
+        ai_move_probs.append(prob)
+
+        if engine.is_in_terminal_state(board) != 0:
+            break
+
     status = engine.is_in_terminal_state(board)
+    print(f"Game over after {i} moves, status: {status}")
 
-    if status != 0:
-        print(f"Game has ended with status: {status}")
-        print(board)
-        return True
+    ai_move_probs.reverse()
+    ai_move_probs_tensor = torch.stack(ai_move_probs)
 
-    return False
+    return ai_move_probs_tensor, status
 
 
 if __name__ == "__main__":
     model = DecisionModel()
 
-    # play a game
-    board = ConnectFour()
+    # learn from the past game
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    optimizer.zero_grad()
 
-    for i in range(10):
-        # random player plays first
-        move = engine.random_move(board)
-        board = engine.make_move(board, 1, move)
+    ai_move_probs_tensor, status = play_against_random_player(model)
+    loss = loss_fn(ai_move_probs_tensor, status)
+    print(f"Loss: {loss}")
 
-        if game_over(board):
-            exit()
-
-        # player 2 plays (AI)
-        move, prob = get_next_move(model, board)
-        board = engine.make_move(board, 2, move)
-
-        if game_over(board):
-            exit()
+    loss.backward()
+    optimizer.step()
