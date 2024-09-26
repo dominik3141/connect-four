@@ -73,27 +73,34 @@ def get_next_move(model: DecisionModel, board: ConnectFour) -> Tuple[Move, Tenso
     return move, probability
 
 
+def game_over(board: ConnectFour) -> bool:
+    status = engine.is_in_terminal_state(board)
+
+    if status != 0:
+        print(f"Game has ended with status: {status}")
+        print(board)
+        return True
+
+    return False
+
+
 if __name__ == "__main__":
     model = DecisionModel()
 
     # play a game
     board = ConnectFour()
 
-    for i in range(1):
+    for i in range(10):
         # random player plays first
         move = engine.random_move(board)
         board = engine.make_move(board, 1, move)
 
-        # check if the game has ended
-        if engine.is_in_terminal_state != 0:
-            print("Game has ended")
-            print(board)
+        if game_over(board):
+            exit()
 
         # player 2 plays (AI)
         move, prob = get_next_move(model, board)
         board = engine.make_move(board, 2, move)
 
-        # check if the game has ended
-        if engine.is_in_terminal_state != 0:
-            print("Game has ended")
-            print(board)
+        if game_over(board):
+            exit()
