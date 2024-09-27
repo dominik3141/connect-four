@@ -6,7 +6,6 @@ import torch
 from torch import Tensor
 from typing import Tuple
 from torch.distributions import Categorical
-import random
 import wandb
 
 
@@ -16,11 +15,11 @@ class DecisionModel(nn.Module):
         self.lin = nn.Sequential(
             nn.Linear(7 * 6, 128),  # Input layer (7 columns, 6 rows)
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(128, 256),
             nn.ReLU(),
-            nn.Linear(
-                64, 7
-            ),  # Output layer (7 columns) (log_props for each possible move)
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 7),
         )
 
     def forward(self, x):
@@ -39,7 +38,7 @@ def loss_fn(
 
     num_moves = len(probs)
     discount_factors = torch.tensor([gamma**i for i in range(num_moves)])
-    discounted_rewards = discount_factors * gamma * reward
+    discounted_rewards = discount_factors * reward
     loss = torch.sum(discounted_rewards * probs)  # element-wise product
 
     # higher loss should indicate worse performance
@@ -51,7 +50,9 @@ def loss_fn(
     return loss
 
 
-def get_next_move(model: DecisionModel, board: ConnectFour) -> Tuple[Move, Tensor]:
+def get_next_move(
+    model: DecisionModel, board: ConnectFour, temperature: float = 1.0
+) -> Tuple[Move, Tensor]:
     """
     Return the move and the probability of the move, ensuring only legal moves are selected.
     """
@@ -64,6 +65,10 @@ def get_next_move(model: DecisionModel, board: ConnectFour) -> Tuple[Move, Tenso
     # Set logits of illegal moves to a large negative number
     masked_logits = torch.where(legal_moves == 1, logits, torch.tensor(-1e9))
 
+    # add some noise to the logits
+    if temperature != 1.0:
+        masked_logits = masked_logits / temperature
+
     probs = F.softmax(masked_logits, dim=-1)
 
     distribution = Categorical(probs)
@@ -73,7 +78,9 @@ def get_next_move(model: DecisionModel, board: ConnectFour) -> Tuple[Move, Tenso
     return move, probability
 
 
-def play_against_self(model: DecisionModel) -> Tuple[Tensor, Tensor, int]:
+def play_against_self(
+    model: DecisionModel, temperature: float = 1.0
+) -> Tuple[Tensor, Tensor, int]:
     """
     Play a game where the model plays against itself.
     Returns the move probabilities for both players and the game outcome.
@@ -84,7 +91,7 @@ def play_against_self(model: DecisionModel) -> Tuple[Tensor, Tensor, int]:
     current_player = 1
 
     while True:
-        move, prob = get_next_move(model, board)
+        move, prob = get_next_move(model, board, temperature=temperature)
         board = engine.make_move(board, current_player, move)
 
         if current_player == 1:
@@ -115,24 +122,24 @@ def self_play(
     learning_rate: float = 0.01,
     run=None,
     eval_interval: int = 100,
+    temperature: float = 1.0,
 ) -> DecisionModel:
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     for i in range(iterations):
         optimizer.zero_grad()
 
-        ai1_move_probs, ai2_move_probs, status = play_against_self(model)
+        ai1_move_probs, ai2_move_probs, status = play_against_self(
+            model, temperature=temperature
+        )
 
         # Compute losses for both players
         loss1 = loss_fn(ai1_move_probs, status, player=1)
         loss2 = loss_fn(ai2_move_probs, status, player=2)
 
-        # decide at random which loss to backpropagate
-        if random.random() < 0.5:
-            loss1.backward()
-        else:
-            loss2.backward()
-
+        # add the losses
+        loss = loss1 + loss2
+        loss.backward()
         optimizer.step()
 
         # Evaluate the model every eval_interval iterations
@@ -203,23 +210,24 @@ def evaluate_model(model: DecisionModel, iterations: int = 100) -> float:
 
 if __name__ == "__main__":
     # HYPERPARAMETERS
-    learning_rate = 0.01
-    iterations = 10000
+    learning_rate = 0.02
+    iterations = 4000
     eval_interval = 100
-
+    temperature = 8.0
     model = DecisionModel()
 
     # Initialize wandb
     run = wandb.init(project="connect_four")
 
     # log the model architecture
-    wandb.watch(model, log="all")
+    wandb.watch(model, log="all", log_freq=10)
     wandb.config.update(
         {
             "learning_rate": learning_rate,
             "iterations": iterations,
             "eval_interval": eval_interval,
             "model_architecture": str(model),
+            "temperature": temperature,
         }
     )
 
@@ -233,6 +241,7 @@ if __name__ == "__main__":
         learning_rate=learning_rate,
         run=run,
         eval_interval=eval_interval,
+        temperature=temperature,
     )
 
     # evaluate the trained model
