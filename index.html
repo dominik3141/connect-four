@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Connect Four AI</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+
+        #board {
+            display: grid;
+            grid-template-rows: repeat(6, 60px);
+            grid-template-columns: repeat(7, 60px);
+            gap: 5px;
+            justify-content: center;
+            margin-top: 50px;
+        }
+
+        .cell {
+            width: 60px;
+            height: 60px;
+            background-color: #00BFFF;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        .cell.player1 {
+            background-color: red;
+        }
+
+        .cell.player2 {
+            background-color: yellow;
+        }
+
+        #message {
+            margin-top: 20px;
+            font-size: 1.2em;
+        }
+
+        #reset {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 1em;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Connect Four vs AI</h1>
+    <div id="board"></div>
+    <div id="message"></div>
+    <button id="reset">Reset Game</button>
+
+    <script>
+        const rows = 6;
+        const cols = 7;
+        let currentPlayer = 1; // Player 1 is the human
+        let gameOver = false;
+
+        const boardElement = document.getElementById('board');
+        const messageElement = document.getElementById('message');
+        const resetButton = document.getElementById('reset');
+
+        // Initialize the board UI
+        function initializeBoard(board) {
+            boardElement.innerHTML = '';
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    const cell = document.createElement('div');
+                    cell.classList.add('cell');
+                    cell.dataset.column = c;
+                    if (board[r][c] === 1) {
+                        cell.classList.add('player1');
+                    } else if (board[r][c] === 2) {
+                        cell.classList.add('player2');
+                    }
+                    boardElement.appendChild(cell);
+                }
+            }
+        }
+
+        // Fetch the initial game state
+        async function fetchInitialState() {
+            const response = await fetch('/start');
+            const data = await response.json();
+            initializeBoard(data.board);
+            messageElement.textContent = "Your turn!";
+        }
+
+        // Handle cell click
+        boardElement.addEventListener('click', async (event) => {
+            if (gameOver) return;
+            const target = event.target;
+            if (!target.classList.contains('cell')) return;
+            const column = parseInt(target.dataset.column);
+
+            const response = await fetch('/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ move: column })
+            });
+            const data = await response.json();
+
+            if (data.error) {
+                alert(data.error);
+                return;
+            }
+
+            initializeBoard(data.board);
+
+            if (data.status === 1) {
+                messageElement.textContent = "You win!";
+                gameOver = true;
+            } else if (data.status === 2) {
+                messageElement.textContent = "AI wins!";
+                gameOver = true;
+            } else if (data.status === 3) {
+                messageElement.textContent = "It's a stalemate!";
+                gameOver = true;
+            } else {
+                messageElement.textContent = "AI's turn...";
+                // Let AI make its move
+                const aiResponse = await fetch('/ai_move');
+                const aiData = await aiResponse.json();
+                initializeBoard(aiData.board);
+
+                if (aiData.status === 1) {
+                    messageElement.textContent = "You win!";
+                    gameOver = true;
+                } else if (aiData.status === 2) {
+                    messageElement.textContent = "AI wins!";
+                    gameOver = true;
+                } else if (aiData.status === 3) {
+                    messageElement.textContent = "It's a stalemate!";
+                    gameOver = true;
+                } else {
+                    messageElement.textContent = "Your turn!";
+                }
+            }
+        });
+
+        // Handle reset button
+        resetButton.addEventListener('click', async () => {
+            const response = await fetch('/reset');
+            const data = await response.json();
+            initializeBoard(data.board);
+            messageElement.textContent = "Your turn!";
+            gameOver = false;
+        });
+
+        // Initialize the game on page load
+        fetchInitialState();
+    </script>
+</body>
+
+</html>
