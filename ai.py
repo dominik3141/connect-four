@@ -4,8 +4,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 from torch import Tensor
-from typing import Dict, Tuple
+from typing import Tuple
 from torch.distributions import Categorical
+import random
+import wandb
 
 
 class DecisionModel(nn.Module):
@@ -25,20 +27,16 @@ class DecisionModel(nn.Module):
         return self.lin(x)
 
 
-def loss_fn(probs: Tensor, outcome: int, gamma: float = 0.95) -> Tensor:
-    """
-    probs is of shape [num_moves] (as it contains only the probability of the selected move)
-    """
-    dict_of_reward: Dict[int, float] = {
-        1: -5.0,  # Player 1 won (undesirable)I
-        2: 4.0,  # Player 2 won (AI won, desirable)
-        3: -2.0,  # Stalemate (slightly undesirable)
-    }
+def loss_fn(
+    probs: Tensor, outcome: int, player: int = 2, gamma: float = 0.95
+) -> Tensor:
+    if outcome == 3:  # Draw
+        reward = -2.0
+    elif outcome == player:  # Player wins
+        reward = 4.0
+    else:  # Player loses
+        reward = -5.0
 
-    # calculate the reward
-    reward = dict_of_reward[outcome]
-
-    # we calculate the loss in a very vectorized way
     num_moves = len(probs)
     discount_factors = torch.tensor([gamma**i for i in range(num_moves)])
     discounted_rewards = discount_factors * gamma * reward
@@ -47,7 +45,7 @@ def loss_fn(probs: Tensor, outcome: int, gamma: float = 0.95) -> Tensor:
     # higher loss should indicate worse performance
     loss = -loss
 
-    # we also want to normalize the loss
+    # normalize the loss
     loss = loss / num_moves
 
     return loss
@@ -75,8 +73,74 @@ def get_next_move(model: DecisionModel, board: ConnectFour) -> Tuple[Move, Tenso
     return move, probability
 
 
-def self_play(model: DecisionModel) -> DecisionModel:
-    pass
+def play_against_self(model: DecisionModel) -> Tuple[Tensor, Tensor, int]:
+    """
+    Play a game where the model plays against itself.
+    Returns the move probabilities for both players and the game outcome.
+    """
+    board = ConnectFour()
+    ai1_move_probs = []
+    ai2_move_probs = []
+    current_player = 1
+
+    while True:
+        move, prob = get_next_move(model, board)
+        board = engine.make_move(board, current_player, move)
+
+        if current_player == 1:
+            ai1_move_probs.append(prob)
+        else:
+            ai2_move_probs.append(prob)
+
+        if engine.is_in_terminal_state(board) != 0:
+            break
+
+        current_player = 3 - current_player  # Switch player
+
+    status = engine.is_in_terminal_state(board)
+
+    # Reverse the move probabilities for correct discounting
+    ai1_move_probs.reverse()
+    ai2_move_probs.reverse()
+
+    ai1_move_probs_tensor = torch.stack(ai1_move_probs)
+    ai2_move_probs_tensor = torch.stack(ai2_move_probs)
+
+    return ai1_move_probs_tensor, ai2_move_probs_tensor, status
+
+
+def self_play(
+    model: DecisionModel,
+    iterations: int = 100,
+    learning_rate: float = 0.01,
+    run=None,
+    eval_interval: int = 100,
+) -> DecisionModel:
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+    for i in range(iterations):
+        optimizer.zero_grad()
+
+        ai1_move_probs, ai2_move_probs, status = play_against_self(model)
+
+        # Compute losses for both players
+        loss1 = loss_fn(ai1_move_probs, status, player=1)
+        loss2 = loss_fn(ai2_move_probs, status, player=2)
+
+        # decide at random which loss to backpropagate
+        if random.random() < 0.5:
+            loss1.backward()
+        else:
+            loss2.backward()
+
+        optimizer.step()
+
+        # Evaluate the model every eval_interval iterations
+        if run and (i + 1) % eval_interval == 0:
+            win_rate = evaluate_model(model)
+            run.log({"win_rate": win_rate, "iteration": i + 1})
+
+    return model
 
 
 def play_against_random_player(model: DecisionModel) -> Tuple[Tensor, int]:
@@ -138,13 +202,44 @@ def evaluate_model(model: DecisionModel, iterations: int = 100) -> float:
 
 
 if __name__ == "__main__":
+    # HYPERPARAMETERS
+    learning_rate = 0.01
+    iterations = 10000
+    eval_interval = 100
+
     model = DecisionModel()
+
+    # Initialize wandb
+    run = wandb.init(project="connect_four")
+
+    # log the model architecture
+    wandb.watch(model, log="all")
+    wandb.config.update(
+        {
+            "learning_rate": learning_rate,
+            "iterations": iterations,
+            "eval_interval": eval_interval,
+            "model_architecture": str(model),
+        }
+    )
 
     # evaluate the untrained model
     print(f"Model evaluation before training: {evaluate_model(model)}")
 
-    # train the model
-    model = train_model(500, model=model)
+    # train the model using self-play
+    model = self_play(
+        model,
+        iterations=iterations,
+        learning_rate=learning_rate,
+        run=run,
+        eval_interval=eval_interval,
+    )
 
     # evaluate the trained model
     print(f"Model evaluation after training: {evaluate_model(model)}")
+
+    # save the model
+    torch.save(model.state_dict(), "model_self_play.pth")
+
+    # Finish the wandb run
+    run.finish()
