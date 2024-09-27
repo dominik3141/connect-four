@@ -11,20 +11,32 @@ import random
 
 
 class DecisionModel(nn.Module):
-    def __init__(self):
+    def __init__(self, d_model: int = 64, nhead: int = 4, num_layers: int = 2):
         super(DecisionModel, self).__init__()
-        self.lin = nn.Sequential(
-            nn.Linear(7 * 6, 128),  # Input layer (7 columns, 6 rows)
-            nn.ReLU(),
-            nn.Linear(128, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, 7),
+
+        self.embedding = nn.Linear(2 * 7 * 6, d_model)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=nhead, batch_first=True
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=num_layers
         )
 
-    def forward(self, x):
-        return self.lin(x)
+        self.fc_out = nn.Linear(d_model, 7)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Convert input to shape (2, 7, 6)
+        x = x.view(7, 6)
+        player1_board = (x == 1).float().view(-1)
+        player2_board = (x == 2).float().view(-1)
+        x = torch.cat([player1_board, player2_board], dim=0)  # Shape: (2 * 7 * 6)
+
+        x = self.embedding(x)  # Shape: (d_model,)
+        x = x.unsqueeze(0)  # Shape: (1, d_model)
+        x = self.transformer_encoder(x)
+        x = x.squeeze(0)  # Shape: (d_model,)
+        return self.fc_out(x)
 
 
 def loss_fn(
@@ -227,14 +239,17 @@ def evaluate_model(model: DecisionModel, iterations: int = 100) -> float:
 
 if __name__ == "__main__":
     # HYPERPARAMETERS
-    learning_rate = 0.02
-    iterations = 2000
+    learning_rate = 0.01
+    iterations = 5000
     eval_interval = 50
     temperature = 1.0
-    epsilon = 0.25
+    epsilon = 0.75
 
     # initialize the model
     model = DecisionModel()
+
+    # load the weights from file
+    # model.load_state_dict(torch.load("model_self_play.pth"))
 
     # Initialize wandb
     run = wandb.init(project="connect_four")
@@ -271,6 +286,9 @@ if __name__ == "__main__":
 
     # save the model
     torch.save(model.state_dict(), "model_self_play.pth")
+
+    # save the model to wandb
+    wandb.save("model_self_play.pth")
 
     # Finish the wandb run
     run.finish()
