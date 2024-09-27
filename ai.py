@@ -7,6 +7,7 @@ from torch import Tensor
 from typing import Tuple
 from torch.distributions import Categorical
 import wandb
+import random
 
 
 class DecisionModel(nn.Module):
@@ -51,7 +52,10 @@ def loss_fn(
 
 
 def get_next_move(
-    model: DecisionModel, board: ConnectFour, temperature: float = 1.0
+    model: DecisionModel,
+    board: ConnectFour,
+    temperature: float = 1.0,
+    epsilon: float = 0,
 ) -> Tuple[Move, Tensor]:
     """
     Return the move and the probability of the move, ensuring only legal moves are selected.
@@ -72,14 +76,24 @@ def get_next_move(
     probs = F.softmax(masked_logits, dim=-1)
 
     distribution = Categorical(probs)
-    move = distribution.sample()
+
+    # choose a random move with probability epsilon
+    if random.random() < epsilon:
+        move = random.randint(0, 6)
+    else:
+        move = distribution.sample()
+
+    # make sure the move is legal
+    if not engine.is_legal(board, move):
+        return get_next_move(model, board, temperature, epsilon)
+
     probability = probs[move]
 
     return move, probability
 
 
 def play_against_self(
-    model: DecisionModel, temperature: float = 1.0
+    model: DecisionModel, temperature: float = 1.0, epsilon: float = 0
 ) -> Tuple[Tensor, Tensor, int]:
     """
     Play a game where the model plays against itself.
@@ -91,7 +105,9 @@ def play_against_self(
     current_player = 1
 
     while True:
-        move, prob = get_next_move(model, board, temperature=temperature)
+        move, prob = get_next_move(
+            model, board, temperature=temperature, epsilon=epsilon
+        )
         board = engine.make_move(board, current_player, move)
 
         if current_player == 1:
@@ -123,6 +139,7 @@ def self_play(
     run=None,
     eval_interval: int = 100,
     temperature: float = 1.0,
+    epsilon: float = 0,
 ) -> DecisionModel:
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -130,7 +147,7 @@ def self_play(
         optimizer.zero_grad()
 
         ai1_move_probs, ai2_move_probs, status = play_against_self(
-            model, temperature=temperature
+            model, temperature=temperature, epsilon=epsilon
         )
 
         # Compute losses for both players
@@ -211,9 +228,12 @@ def evaluate_model(model: DecisionModel, iterations: int = 100) -> float:
 if __name__ == "__main__":
     # HYPERPARAMETERS
     learning_rate = 0.02
-    iterations = 4000
-    eval_interval = 100
-    temperature = 8.0
+    iterations = 2000
+    eval_interval = 50
+    temperature = 1.0
+    epsilon = 0.25
+
+    # initialize the model
     model = DecisionModel()
 
     # Initialize wandb
@@ -228,6 +248,7 @@ if __name__ == "__main__":
             "eval_interval": eval_interval,
             "model_architecture": str(model),
             "temperature": temperature,
+            "epsilon": epsilon,
         }
     )
 
@@ -242,6 +263,7 @@ if __name__ == "__main__":
         run=run,
         eval_interval=eval_interval,
         temperature=temperature,
+        epsilon=epsilon,
     )
 
     # evaluate the trained model
