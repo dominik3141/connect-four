@@ -12,11 +12,13 @@ class DecisionModel(nn.Module):
     def __init__(self):
         super(DecisionModel, self).__init__()
         self.lin = nn.Sequential(
-            nn.Linear(7 * 6 * 2, 128),
+            nn.Linear(7 * 6 * 2, 256),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(256, 256),
             nn.ReLU(),
-            nn.Linear(128, 7),
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, 7),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

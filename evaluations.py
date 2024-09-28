@@ -51,6 +51,7 @@ def evaluate_model(
 
     results = {opponent: {"wins": 0, "losses": 0, "draws": 0} for opponent in opponents}
 
+    # play num_games against each opponent
     for opponent_name, opponent_fn in opponents.items():
         for game_num in range(num_games):
             # Model plays as player 2
@@ -77,6 +78,15 @@ def evaluate_model(
 def log_evaluation_results(run: Any, eval_results: Dict[str, Dict[str, int]]) -> None:
     """
     Logs the win rate for each opponent to the provided run object.
+
+    eval_results is a dictionary with the following structure:
+    {
+        "opponent_name": {
+            "wins": int,
+            "losses": int,
+            "draws": int
+        }
+    }
     """
     for opponent, results in eval_results.items():
         total_games = sum(results.values())

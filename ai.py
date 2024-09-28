@@ -18,10 +18,11 @@ def loss_fn(
     num_moves = len(probs)
     discount_factors = torch.tensor([gamma**i for i in range(num_moves)])
     discounted_rewards = discount_factors * reward
-    loss = torch.sum(discounted_rewards * probs)  # element-wise product
 
-    # higher loss should indicate worse performance
-    loss = -loss
+    # Calculate log probabilities
+    log_probs = torch.log(probs + 1e-8)  # Add small epsilon to avoid log(0)
+
+    loss = torch.sum(discounted_rewards * log_probs)  # element-wise product
 
     # normalize the loss
     loss = loss / num_moves
@@ -31,7 +32,7 @@ def loss_fn(
 
 if __name__ == "__main__":
     # HYPERPARAMETERS
-    learning_rate = 0.01
+    learning_rate = 0.0025
     iterations = 1000
     eval_interval = 200
     eval_games = 10
