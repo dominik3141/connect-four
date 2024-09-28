@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from engine import ConnectFour, is_legal, make_move, is_in_terminal_state
 from ai import (
     DecisionModel,
-    get_next_move,
+    get_next_model_move,
 )
 from minimax import minimax_move
 import torch
@@ -77,7 +77,7 @@ def player_move():
             if opponent == "minimax":
                 ai_move = minimax_move(game, depth)
             else:
-                ai_move, _ = get_next_move(model, game)
+                ai_move, _ = get_next_model_move(model, game)
             game = make_move(game, 2, ai_move)  # AI is player 2
         except ValueError as e:
             return jsonify({"error": str(e)}), 400

@@ -4,8 +4,8 @@ import torch
 from torch import Tensor
 from typing import Tuple
 import wandb
-from evaluations import evaluate_model_comprehensive
-from model import DecisionModel, get_next_move
+from evaluations import evaluate_model, minimax_move
+from model import DecisionModel, get_next_model_move
 
 
 def loss_fn(
@@ -32,28 +32,27 @@ def loss_fn(
     return loss
 
 
-def play_against_self(
+def play_against_minimax(
     model: DecisionModel, temperature: float = 1.0, epsilon: float = 0
-) -> Tuple[Tensor, Tensor, int]:
+) -> Tuple[Tensor, int]:
     """
-    Play a game where the model plays against itself.
-    Returns the move probabilities for both players and the game outcome.
+    Play a game where the model plays against the minimax opponent.
+    Returns the move probabilities for the model and the game outcome.
     """
     board = ConnectFour()
-    ai1_move_probs = []
-    ai2_move_probs = []
+    ai_move_probs = []
     current_player = 1
 
     while True:
-        move, prob = get_next_move(
-            model, board, temperature=temperature, epsilon=epsilon
-        )
-        board = engine.make_move(board, current_player, move)
-
         if current_player == 1:
-            ai1_move_probs.append(prob)
+            move = minimax_move(board)
         else:
-            ai2_move_probs.append(prob)
+            move, prob = get_next_model_move(
+                model, board, temperature=temperature, epsilon=epsilon
+            )
+            ai_move_probs.append(prob)
+
+        board = engine.make_move(board, current_player, move)
 
         if engine.is_in_terminal_state(board) != 0:
             break
@@ -63,16 +62,13 @@ def play_against_self(
     status = engine.is_in_terminal_state(board)
 
     # Reverse the move probabilities for correct discounting
-    ai1_move_probs.reverse()
-    ai2_move_probs.reverse()
+    ai_move_probs.reverse()
+    ai_move_probs_tensor = torch.stack(ai_move_probs)
 
-    ai1_move_probs_tensor = torch.stack(ai1_move_probs)
-    ai2_move_probs_tensor = torch.stack(ai2_move_probs)
-
-    return ai1_move_probs_tensor, ai2_move_probs_tensor, status
+    return ai_move_probs_tensor, status
 
 
-def self_play(
+def train_against_minimax(
     model: DecisionModel,
     iterations: int = 100,
     learning_rate: float = 0.01,
@@ -86,18 +82,17 @@ def self_play(
     for i in range(iterations):
         optimizer.zero_grad()
 
-        ai1_move_probs, ai2_move_probs, status = play_against_self(
+        ai_move_probs, status = play_against_minimax(
             model, temperature=temperature, epsilon=epsilon
         )
 
-        loss2 = loss_fn(ai2_move_probs, status, player=2)
-        loss = loss2
+        loss = loss_fn(ai_move_probs, status, player=2)  # always train as player 2
         loss.backward()
         optimizer.step()
 
         # Evaluate the model every eval_interval iterations
         if run and (i + 1) % eval_interval == 0:
-            eval_results = evaluate_model_comprehensive(model, num_games=10)
+            eval_results = evaluate_model(model, num_games=10)
             total_games = sum(
                 sum(results.values()) for results in eval_results.values()
             )
@@ -113,11 +108,11 @@ def self_play(
 
 if __name__ == "__main__":
     # HYPERPARAMETERS
-    learning_rate = 0.01
-    iterations = 5000
-    eval_interval = 50
+    learning_rate = 0.0025
+    iterations = 9000
+    eval_interval = 200
     temperature = 1.0
-    epsilon = 0.75
+    epsilon = 0.0
 
     # initialize the model
     model = DecisionModel()
@@ -140,11 +135,10 @@ if __name__ == "__main__":
 
     # evaluate the untrained model
     print("Model evaluation before training:")
-    initial_results = evaluate_model_comprehensive(model)
+    initial_results = evaluate_model(model)
     print(initial_results)
 
-    # train the model using self-play
-    model = self_play(
+    model = train_against_minimax(
         model,
         iterations=iterations,
         learning_rate=learning_rate,
@@ -156,14 +150,14 @@ if __name__ == "__main__":
 
     # evaluate the trained model
     print("Model evaluation after training:")
-    final_results = evaluate_model_comprehensive(model)
+    final_results = evaluate_model(model)
     print(final_results)
 
     # save the model
-    torch.save(model.state_dict(), "model_self_play.pth")
+    torch.save(model.state_dict(), "model.pth")
 
     # save the model to wandb
-    wandb.save("model_self_play.pth")
+    wandb.save("model.pth")
 
     # Log final comprehensive evaluation results to wandb
     for opponent, results in final_results.items():

@@ -28,7 +28,7 @@ class DecisionModel(nn.Module):
         return self.lin(x)
 
 
-def get_next_move(
+def get_next_model_move(
     model: DecisionModel,
     board: ConnectFour,
     temperature: float = 1.0,
@@ -62,7 +62,7 @@ def get_next_move(
 
     # make sure the move is legal
     if not is_legal(board, move):
-        return get_next_move(model, board, temperature, epsilon)
+        return get_next_model_move(model, board, temperature, epsilon)
 
     probability = probs[move]
 
