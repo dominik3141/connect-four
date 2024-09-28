@@ -11,32 +11,23 @@ import random
 
 
 class DecisionModel(nn.Module):
-    def __init__(self, d_model: int = 64, nhead: int = 4, num_layers: int = 2):
+    def __init__(self):
         super(DecisionModel, self).__init__()
-
-        self.embedding = nn.Linear(2 * 7 * 6, d_model)
-
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=nhead, batch_first=True
+        self.lin = nn.Sequential(
+            nn.Linear(7 * 6 * 2, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 7),
         )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer, num_layers=num_layers
-        )
-
-        self.fc_out = nn.Linear(d_model, 7)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Convert input to shape (2, 7, 6)
+        # Convert input to shape (7, 6)
         x = x.view(7, 6)
         player1_board = (x == 1).float().view(-1)
         player2_board = (x == 2).float().view(-1)
-        x = torch.cat([player1_board, player2_board], dim=0)  # Shape: (2 * 7 * 6)
-
-        x = self.embedding(x)  # Shape: (d_model,)
-        x = x.unsqueeze(0)  # Shape: (1, d_model)
-        x = self.transformer_encoder(x)
-        x = x.squeeze(0)  # Shape: (d_model,)
-        return self.fc_out(x)
+        x = torch.cat([player1_board, player2_board], dim=0)  # Shape: (7 * 6 * 2)
+        return self.lin(x)
 
 
 def loss_fn(
