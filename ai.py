@@ -32,9 +32,10 @@ def loss_fn(
 
 if __name__ == "__main__":
     # HYPERPARAMETERS
-    learning_rate = 0.0025
+    learning_rate = 0.01
     iterations = 1000
     eval_interval = 200
+    eval_games = 50
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
     depth = 2  # depth for minimax
@@ -60,7 +61,7 @@ if __name__ == "__main__":
 
     # evaluate the untrained model
     print("Model evaluation before training:")
-    initial_results = evaluate_model(model)
+    initial_results = evaluate_model(model, num_games=eval_games)
     print(initial_results)
 
     model = train_against_minimax(
@@ -76,7 +77,7 @@ if __name__ == "__main__":
 
     # evaluate the trained model
     print("Model evaluation after training:")
-    final_results = evaluate_model(model)
+    final_results = evaluate_model(model, num_games=eval_games)
     print(final_results)
 
     # save the model

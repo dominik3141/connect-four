@@ -5,6 +5,7 @@ from engine import is_in_terminal_state, make_move, is_legal
 from model import DecisionModel, get_next_model_move
 from torch import Tensor
 import torch
+import wandb
 
 
 def minimax_move(board: ConnectFour, depth: int = 3) -> int:
@@ -151,6 +152,7 @@ def train_against_minimax(
     learning_rate: float = 0.01,
     run=None,
     eval_interval: int = 100,
+    eval_games: int = 100,
     temperature: float = 1.0,
     epsilon: float = 0,
     depth: int = 3,
@@ -168,11 +170,15 @@ def train_against_minimax(
         )
 
         loss = loss_fn(ai_move_probs, status, player=2)  # always train as player 2
+
+        # log the loss to wandb
+        wandb.log({"loss": loss})
+
         loss.backward()
         optimizer.step()
 
         if i % eval_interval == 0:
-            eval_results = evaluate_model(model)
+            eval_results = evaluate_model(model, num_games=eval_games)
             log_evaluation_results(run, eval_results, i)
 
     return model
