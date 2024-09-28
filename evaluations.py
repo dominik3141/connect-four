@@ -3,6 +3,7 @@ import engine
 from typing import Callable, Dict
 from model import DecisionModel, get_next_model_move
 from minimax import minimax_move
+from typing import Any
 
 
 def play_against_opponent(
@@ -71,3 +72,19 @@ def evaluate_model(
                 results[opponent_name]["draws"] += 1
 
     return results
+
+
+def log_evaluation_results(
+    run: Any, eval_results: Dict[str, Dict[str, int]], iteration: int
+) -> None:
+    """
+    Logs the evaluation results to the provided run object.
+    """
+    total_games = sum(sum(results.values()) for results in eval_results.values())
+    total_wins = sum(results["wins"] for results in eval_results.values())
+    win_rate = total_wins / total_games
+
+    run.log({"win_rate": win_rate, "iteration": iteration})
+    for opponent, results in eval_results.items():
+        for outcome, count in results.items():
+            run.log({f"{opponent}_{outcome}": count, "iteration": iteration})

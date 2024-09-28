@@ -4,7 +4,7 @@ import torch
 from torch import Tensor
 from typing import Tuple
 import wandb
-from evaluations import evaluate_model, minimax_move
+from evaluations import evaluate_model, minimax_move, log_evaluation_results
 from model import DecisionModel, get_next_model_move
 
 
@@ -90,18 +90,9 @@ def train_against_minimax(
         loss.backward()
         optimizer.step()
 
-        # Evaluate the model every eval_interval iterations
-        if run and (i + 1) % eval_interval == 0:
-            eval_results = evaluate_model(model, num_games=10)
-            total_games = sum(
-                sum(results.values()) for results in eval_results.values()
-            )
-            total_wins = sum(results["wins"] for results in eval_results.values())
-            win_rate = total_wins / total_games
-            run.log({"win_rate": win_rate, "iteration": i + 1})
-            for opponent, results in eval_results.items():
-                for outcome, count in results.items():
-                    run.log({f"{opponent}_{outcome}": count, "iteration": i + 1})
+        if i % eval_interval == 0:
+            eval_results = evaluate_model(model)
+            log_evaluation_results(run, eval_results, i)
 
     return model
 
