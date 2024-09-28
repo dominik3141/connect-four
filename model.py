@@ -37,33 +37,33 @@ def get_next_model_move(
     """
     Return the move and the probability of the move, ensuring only legal moves are selected.
     """
-    state_tensor = torch.Tensor(board.state).view(7 * 6).float()
-    logits = model(state_tensor)
+    while True:
+        state_tensor = torch.Tensor(board.state).view(7 * 6).float()
+        logits = model(state_tensor)
 
-    # Create a mask for legal moves, explicitly converting to int
-    legal_moves = torch.Tensor([int(is_legal(board, move)) for move in range(7)])
+        # Create a mask for legal moves, explicitly converting to int
+        legal_moves = torch.Tensor([int(is_legal(board, move)) for move in range(7)])
 
-    # Set logits of illegal moves to a large negative number
-    masked_logits = torch.where(legal_moves == 1, logits, torch.tensor(-1e9))
+        # Set logits of illegal moves to a large negative number
+        masked_logits = torch.where(legal_moves == 1, logits, torch.tensor(-1e9))
 
-    # add some noise to the logits
-    if temperature != 1.0:
-        masked_logits = masked_logits / temperature
+        # add some noise to the logits
+        if temperature != 1.0:
+            masked_logits = masked_logits / temperature
 
-    probs = F.softmax(masked_logits, dim=-1)
+        probs = F.softmax(masked_logits, dim=-1)
 
-    distribution = Categorical(probs)
+        distribution = Categorical(probs)
 
-    # choose a random move with probability epsilon
-    if random.random() < epsilon:
-        move = random.randint(0, 6)
-    else:
-        move = distribution.sample()
+        # choose a random move with probability epsilon
+        if random.random() < epsilon:
+            move = random.randint(0, 6)
+        else:
+            move = distribution.sample()
 
-    # make sure the move is legal
-    if not is_legal(board, move):
-        return get_next_model_move(model, board, temperature, epsilon)
+        # If the move is legal, return it
+        if not is_legal(board, move):
+            continue
 
-    probability = probs[move]
-
-    return move, probability
+        probability = probs[move]
+        return move, probability
