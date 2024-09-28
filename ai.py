@@ -1,33 +1,11 @@
-from engine import ConnectFour, Move
+from engine import ConnectFour
 import engine
-import torch.nn as nn
-import torch.nn.functional as F
 import torch
 from torch import Tensor
 from typing import Tuple
-from torch.distributions import Categorical
 import wandb
-import random
-
-
-class DecisionModel(nn.Module):
-    def __init__(self):
-        super(DecisionModel, self).__init__()
-        self.lin = nn.Sequential(
-            nn.Linear(7 * 6 * 2, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 7),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Convert input to shape (7, 6)
-        x = x.view(7, 6)
-        player1_board = (x == 1).float().view(-1)
-        player2_board = (x == 2).float().view(-1)
-        x = torch.cat([player1_board, player2_board], dim=0)  # Shape: (7 * 6 * 2)
-        return self.lin(x)
+from evaluations import evaluate_model_comprehensive
+from model import DecisionModel, get_next_move
 
 
 def loss_fn(
@@ -52,47 +30,6 @@ def loss_fn(
     loss = loss / num_moves
 
     return loss
-
-
-def get_next_move(
-    model: DecisionModel,
-    board: ConnectFour,
-    temperature: float = 1.0,
-    epsilon: float = 0,
-) -> Tuple[Move, Tensor]:
-    """
-    Return the move and the probability of the move, ensuring only legal moves are selected.
-    """
-    state_tensor = torch.Tensor(board.state).view(7 * 6).float()
-    logits = model(state_tensor)
-
-    # Create a mask for legal moves, explicitly converting to int
-    legal_moves = torch.Tensor([int(engine.is_legal(board, move)) for move in range(7)])
-
-    # Set logits of illegal moves to a large negative number
-    masked_logits = torch.where(legal_moves == 1, logits, torch.tensor(-1e9))
-
-    # add some noise to the logits
-    if temperature != 1.0:
-        masked_logits = masked_logits / temperature
-
-    probs = F.softmax(masked_logits, dim=-1)
-
-    distribution = Categorical(probs)
-
-    # choose a random move with probability epsilon
-    if random.random() < epsilon:
-        move = random.randint(0, 6)
-    else:
-        move = distribution.sample()
-
-    # make sure the move is legal
-    if not engine.is_legal(board, move):
-        return get_next_move(model, board, temperature, epsilon)
-
-    probability = probs[move]
-
-    return move, probability
 
 
 def play_against_self(
@@ -153,79 +90,25 @@ def self_play(
             model, temperature=temperature, epsilon=epsilon
         )
 
-        # Compute losses for both players
-        loss1 = loss_fn(ai1_move_probs, status, player=1)
         loss2 = loss_fn(ai2_move_probs, status, player=2)
-
-        # add the losses
-        loss = loss1 + loss2
+        loss = loss2
         loss.backward()
         optimizer.step()
 
         # Evaluate the model every eval_interval iterations
         if run and (i + 1) % eval_interval == 0:
-            win_rate = evaluate_model(model)
+            eval_results = evaluate_model_comprehensive(model, num_games=10)
+            total_games = sum(
+                sum(results.values()) for results in eval_results.values()
+            )
+            total_wins = sum(results["wins"] for results in eval_results.values())
+            win_rate = total_wins / total_games
             run.log({"win_rate": win_rate, "iteration": i + 1})
+            for opponent, results in eval_results.items():
+                for outcome, count in results.items():
+                    run.log({f"{opponent}_{outcome}": count, "iteration": i + 1})
 
     return model
-
-
-def play_against_random_player(model: DecisionModel) -> Tuple[Tensor, int]:
-    board = ConnectFour()
-
-    i = 0
-    ai_move_probs = []
-    while True:
-        i += 1
-        move = engine.random_move(board)
-        board = engine.make_move(board, 1, move)
-
-        if engine.is_in_terminal_state(board) != 0:
-            break
-
-        move, prob = get_next_move(model, board)
-        board = engine.make_move(board, 2, move)
-        ai_move_probs.append(prob)
-
-        if engine.is_in_terminal_state(board) != 0:
-            break
-
-    status = engine.is_in_terminal_state(board)
-
-    ai_move_probs.reverse()
-    ai_move_probs_tensor = torch.stack(ai_move_probs)
-
-    return ai_move_probs_tensor, status
-
-
-def train_model(
-    iterations: int, learning_rate: float = 0.01, model: DecisionModel = None
-) -> DecisionModel:
-    if model is None:
-        model = DecisionModel()
-
-    # for now without batching
-    for i in range(iterations):
-        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-        optimizer.zero_grad()
-
-        ai_move_probs_tensor, status = play_against_random_player(model)
-        loss = loss_fn(ai_move_probs_tensor, status)
-
-        loss.backward()
-        optimizer.step()
-
-    return model
-
-
-def evaluate_model(model: DecisionModel, iterations: int = 100) -> float:
-    # return the ratio of wins for the model
-    wins = 0
-    for i in range(iterations):
-        _, status = play_against_random_player(model)
-        if status == 2:
-            wins += 1
-    return wins / iterations
 
 
 if __name__ == "__main__":
@@ -238,9 +121,6 @@ if __name__ == "__main__":
 
     # initialize the model
     model = DecisionModel()
-
-    # load the weights from file
-    # model.load_state_dict(torch.load("model_self_play.pth"))
 
     # Initialize wandb
     run = wandb.init(project="connect_four")
@@ -259,7 +139,9 @@ if __name__ == "__main__":
     )
 
     # evaluate the untrained model
-    print(f"Model evaluation before training: {evaluate_model(model)}")
+    print("Model evaluation before training:")
+    initial_results = evaluate_model_comprehensive(model)
+    print(initial_results)
 
     # train the model using self-play
     model = self_play(
@@ -273,13 +155,20 @@ if __name__ == "__main__":
     )
 
     # evaluate the trained model
-    print(f"Model evaluation after training: {evaluate_model(model)}")
+    print("Model evaluation after training:")
+    final_results = evaluate_model_comprehensive(model)
+    print(final_results)
 
     # save the model
     torch.save(model.state_dict(), "model_self_play.pth")
 
     # save the model to wandb
     wandb.save("model_self_play.pth")
+
+    # Log final comprehensive evaluation results to wandb
+    for opponent, results in final_results.items():
+        for outcome, count in results.items():
+            wandb.log({f"final_{opponent}_{outcome}": count})
 
     # Finish the wandb run
     run.finish()
