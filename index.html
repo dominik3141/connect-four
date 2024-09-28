@@ -121,6 +121,7 @@
         const cols = 7;
         let currentPlayer = 1; // Player 1 is the human
         let gameOver = false;
+        let boardState = [];
 
         const boardElement = document.getElementById('board');
         const messageElement = document.getElementById('message');
@@ -165,6 +166,7 @@
 
         // Initialize the board UI
         function initializeBoard(board) {
+            boardState = board;
             boardElement.innerHTML = '';
             for (let r = 0; r < rows; r++) {
                 for (let c = 0; c < cols; c++) {
@@ -196,10 +198,18 @@
             if (!target.classList.contains('cell')) return;
             const column = parseInt(target.dataset.column);
 
+            const opponent = opponentSelect.value;
+            const depth = parseInt(depthInput.value);
+
             const response = await fetch('/move', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ move: column })
+                body: JSON.stringify({
+                    board: boardState,
+                    move: column,
+                    opponent: opponent,
+                    depth: depth
+                })
             });
             const data = await response.json();
 
@@ -220,34 +230,13 @@
                 messageElement.textContent = "It's a stalemate!";
                 gameOver = true;
             } else {
-                messageElement.textContent = "AI's turn...";
-                // Let AI make its move
-                try {
-                    const aiData = await getAIMove();
-                    initializeBoard(aiData.board);
-
-                    if (aiData.status === 1) {
-                        messageElement.textContent = "You win!";
-                        gameOver = true;
-                    } else if (aiData.status === 2) {
-                        messageElement.textContent = "AI wins!";
-                        gameOver = true;
-                    } else if (aiData.status === 3) {
-                        messageElement.textContent = "It's a stalemate!";
-                        gameOver = true;
-                    } else {
-                        messageElement.textContent = "Your turn!";
-                    }
-                } catch (error) {
-                    console.error('Error:', error);
-                    messageElement.textContent = "An error occurred during AI's move.";
-                }
+                messageElement.textContent = "Your turn!";
             }
         });
 
         // Handle reset button
         resetButton.addEventListener('click', async () => {
-            const response = await fetch('/reset');
+            const response = await fetch('/start');
             const data = await response.json();
             initializeBoard(data.board);
             messageElement.textContent = "Your turn!";
