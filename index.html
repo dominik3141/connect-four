@@ -53,6 +53,17 @@
 
 <body>
     <h1>Connect Four vs AI</h1>
+    <div>
+        <label for="opponent-select">Choose opponent:</label>
+        <select id="opponent-select">
+            <option value="ai">AI Model</option>
+            <option value="minimax">Minimax</option>
+        </select>
+        <div id="depth-container" style="display: none;">
+            <label for="depth-input">Minimax Depth:</label>
+            <input type="number" id="depth-input" min="1" max="5" value="1">
+        </div>
+    </div>
     <div id="board"></div>
     <div id="message"></div>
     <button id="reset">Reset Game</button>
@@ -66,6 +77,43 @@
         const boardElement = document.getElementById('board');
         const messageElement = document.getElementById('message');
         const resetButton = document.getElementById('reset');
+
+        const opponentSelect = document.getElementById('opponent-select');
+        const depthContainer = document.getElementById('depth-container');
+        const depthInput = document.getElementById('depth-input');
+
+        opponentSelect.addEventListener('change', function () {
+            if (this.value === 'minimax') {
+                depthContainer.style.display = 'block';
+            } else {
+                depthContainer.style.display = 'none';
+            }
+        });
+
+        async function getAIMove() {
+            const opponent = opponentSelect.value;
+            let url = '/ai_move';
+            let data = {};
+
+            if (opponent === 'minimax') {
+                url = '/minimax_move';
+                data = { depth: parseInt(depthInput.value) };
+            }
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data),
+            });
+
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+            }
+
+            return response.json();
+        }
 
         // Initialize the board UI
         function initializeBoard(board) {
@@ -126,21 +174,25 @@
             } else {
                 messageElement.textContent = "AI's turn...";
                 // Let AI make its move
-                const aiResponse = await fetch('/ai_move');
-                const aiData = await aiResponse.json();
-                initializeBoard(aiData.board);
+                try {
+                    const aiData = await getAIMove();
+                    initializeBoard(aiData.board);
 
-                if (aiData.status === 1) {
-                    messageElement.textContent = "You win!";
-                    gameOver = true;
-                } else if (aiData.status === 2) {
-                    messageElement.textContent = "AI wins!";
-                    gameOver = true;
-                } else if (aiData.status === 3) {
-                    messageElement.textContent = "It's a stalemate!";
-                    gameOver = true;
-                } else {
-                    messageElement.textContent = "Your turn!";
+                    if (aiData.status === 1) {
+                        messageElement.textContent = "You win!";
+                        gameOver = true;
+                    } else if (aiData.status === 2) {
+                        messageElement.textContent = "AI wins!";
+                        gameOver = true;
+                    } else if (aiData.status === 3) {
+                        messageElement.textContent = "It's a stalemate!";
+                        gameOver = true;
+                    } else {
+                        messageElement.textContent = "Your turn!";
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    messageElement.textContent = "An error occurred during AI's move.";
                 }
             }
         });

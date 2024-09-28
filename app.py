@@ -4,6 +4,7 @@ from ai import (
     DecisionModel,
     get_next_move,
 )
+from minimax import minimax_move
 import torch
 import os
 
@@ -12,7 +13,7 @@ app = Flask(__name__)
 # Initialize the game state and model
 game = ConnectFour()
 model = DecisionModel()
-model_path = "model.pth"
+model_path = "model_minimax.pth"
 
 # Load the trained model if available
 if os.path.exists(model_path):
@@ -74,6 +75,27 @@ def ai_move():
 
     try:
         move, prob = get_next_move(model, game)
+        game = make_move(game, 2, move)  # AI is player 2
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    status = is_in_terminal_state(game)
+    return jsonify({"board": serialize_board(game), "status": status})
+
+
+@app.route("/minimax_move", methods=["POST"])
+def get_minimax_move():
+    global game
+    data = request.get_json()
+    depth = data.get("depth", 1)  # Default depth is 1 if not provided
+
+    if is_in_terminal_state(game) != 0:
+        return jsonify(
+            {"board": serialize_board(game), "status": is_in_terminal_state(game)}
+        )
+
+    try:
+        move = minimax_move(game, depth)
         game = make_move(game, 2, move)  # AI is player 2
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
