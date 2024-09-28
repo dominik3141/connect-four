@@ -9,8 +9,8 @@ import random
 #   1 (player 1)
 #   2 (player 2)
 class ConnectFour:
-    def __init__(self):
-        self.state = np.zeros((6, 7), dtype=int)
+    def __init__(self, state: np.ndarray = np.zeros((6, 7), dtype=int)):
+        self.state = state
 
     def __repr__(self) -> str:
         return str(self.state)

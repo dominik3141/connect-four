@@ -2,9 +2,12 @@ from engine import ConnectFour
 from typing import Tuple
 import copy
 from engine import is_in_terminal_state, make_move, is_legal
+from model import DecisionModel, get_next_model_move
+from torch import Tensor
+import torch
 
 
-def minimax_move(board: ConnectFour, depth: int = 1) -> int:
+def minimax_move(board: ConnectFour, depth: int = 3) -> int:
     """
     Determine the best move for the AI player using the minimax algorithm with alpha-beta pruning.
     """
@@ -104,3 +107,72 @@ def minimax_move(board: ConnectFour, depth: int = 1) -> int:
 
     best_move, _ = minimax(board, depth, float("-inf"), float("inf"), True)
     return best_move
+
+
+def play_against_minimax(
+    model: DecisionModel, temperature: float = 1.0, epsilon: float = 0, depth: int = 3
+) -> Tuple[Tensor, int]:
+    """
+    Play a game where the model plays against the minimax opponent.
+    Returns the move probabilities for the model and the game outcome.
+    """
+    board = ConnectFour()
+    ai_move_probs = []
+    current_player = 1
+
+    while True:
+        if current_player == 1:
+            move = minimax_move(board, depth=depth)
+        else:
+            move, prob = get_next_model_move(
+                model, board, temperature=temperature, epsilon=epsilon
+            )
+            ai_move_probs.append(prob)
+
+        board = make_move(board, current_player, move)
+
+        if is_in_terminal_state(board) != 0:
+            break
+
+        current_player = 3 - current_player  # Switch player
+
+    status = is_in_terminal_state(board)
+
+    # Reverse the move probabilities for correct discounting
+    ai_move_probs.reverse()
+    ai_move_probs_tensor = torch.stack(ai_move_probs)
+
+    return ai_move_probs_tensor, status
+
+
+def train_against_minimax(
+    model: DecisionModel,
+    iterations: int = 100,
+    learning_rate: float = 0.01,
+    run=None,
+    eval_interval: int = 100,
+    temperature: float = 1.0,
+    epsilon: float = 0,
+    depth: int = 3,
+) -> DecisionModel:
+    from ai import loss_fn
+    from evaluations import evaluate_model, log_evaluation_results
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+    for i in range(iterations):
+        optimizer.zero_grad()
+
+        ai_move_probs, status = play_against_minimax(
+            model, temperature=temperature, epsilon=epsilon, depth=depth
+        )
+
+        loss = loss_fn(ai_move_probs, status, player=2)  # always train as player 2
+        loss.backward()
+        optimizer.step()
+
+        if i % eval_interval == 0:
+            eval_results = evaluate_model(model)
+            log_evaluation_results(run, eval_results, i)
+
+    return model

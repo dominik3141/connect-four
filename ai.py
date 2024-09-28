@@ -1,11 +1,9 @@
-from engine import ConnectFour
-import engine
 import torch
 from torch import Tensor
-from typing import Tuple
 import wandb
-from evaluations import evaluate_model, minimax_move, log_evaluation_results
-from model import DecisionModel, get_next_model_move
+from evaluations import evaluate_model
+from model import DecisionModel
+from minimax import train_against_minimax
 
 
 def loss_fn(
@@ -32,79 +30,14 @@ def loss_fn(
     return loss
 
 
-def play_against_minimax(
-    model: DecisionModel, temperature: float = 1.0, epsilon: float = 0
-) -> Tuple[Tensor, int]:
-    """
-    Play a game where the model plays against the minimax opponent.
-    Returns the move probabilities for the model and the game outcome.
-    """
-    board = ConnectFour()
-    ai_move_probs = []
-    current_player = 1
-
-    while True:
-        if current_player == 1:
-            move = minimax_move(board)
-        else:
-            move, prob = get_next_model_move(
-                model, board, temperature=temperature, epsilon=epsilon
-            )
-            ai_move_probs.append(prob)
-
-        board = engine.make_move(board, current_player, move)
-
-        if engine.is_in_terminal_state(board) != 0:
-            break
-
-        current_player = 3 - current_player  # Switch player
-
-    status = engine.is_in_terminal_state(board)
-
-    # Reverse the move probabilities for correct discounting
-    ai_move_probs.reverse()
-    ai_move_probs_tensor = torch.stack(ai_move_probs)
-
-    return ai_move_probs_tensor, status
-
-
-def train_against_minimax(
-    model: DecisionModel,
-    iterations: int = 100,
-    learning_rate: float = 0.01,
-    run=None,
-    eval_interval: int = 100,
-    temperature: float = 1.0,
-    epsilon: float = 0,
-) -> DecisionModel:
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-
-    for i in range(iterations):
-        optimizer.zero_grad()
-
-        ai_move_probs, status = play_against_minimax(
-            model, temperature=temperature, epsilon=epsilon
-        )
-
-        loss = loss_fn(ai_move_probs, status, player=2)  # always train as player 2
-        loss.backward()
-        optimizer.step()
-
-        if i % eval_interval == 0:
-            eval_results = evaluate_model(model)
-            log_evaluation_results(run, eval_results, i)
-
-    return model
-
-
 if __name__ == "__main__":
     # HYPERPARAMETERS
     learning_rate = 0.0025
-    iterations = 9000
+    iterations = 1000
     eval_interval = 200
-    temperature = 1.0
-    epsilon = 0.0
-
+    temperature = 1.0  # temperature for softmax
+    epsilon = 0.0  # epsilon-greedy parameter
+    depth = 2  # depth for minimax
     # initialize the model
     model = DecisionModel()
 
@@ -121,6 +54,7 @@ if __name__ == "__main__":
             "model_architecture": str(model),
             "temperature": temperature,
             "epsilon": epsilon,
+            "depth": depth,
         }
     )
 
@@ -137,6 +71,7 @@ if __name__ == "__main__":
         eval_interval=eval_interval,
         temperature=temperature,
         epsilon=epsilon,
+        depth=depth,
     )
 
     # evaluate the trained model

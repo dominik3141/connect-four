@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, send_from_directory
 from engine import ConnectFour, is_legal, make_move, is_in_terminal_state
-from ai import (
+from model import (
     DecisionModel,
     get_next_model_move,
 )
