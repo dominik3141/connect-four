@@ -9,8 +9,15 @@ import random
 #   1 (player 1)
 #   2 (player 2)
 class ConnectFour:
-    def __init__(self, state: np.ndarray = np.zeros((6, 7), dtype=int)):
-        self.state = state
+    def __init__(self, state: np.ndarray = None):
+        """
+        Initialize the ConnectFour board.
+        If no state is provided, initialize an empty board.
+        """
+        if state is None:
+            self.state = np.zeros((6, 7), dtype=int)
+        else:
+            self.state = state
 
     def __repr__(self) -> str:
         return str(self.state)
@@ -20,6 +27,9 @@ Move: TypeAlias = int  # Column number (0-6)
 
 
 def is_legal(board: ConnectFour, move: Move) -> bool:
+    """
+    Checks if a move is legal
+    """
     # Check if the column is full
     return board.state[0, move] == 0
 
@@ -41,20 +51,22 @@ def random_move(board: ConnectFour) -> Move:
     """
     Returns a random, but legal, move
     """
-    empty_columns: List[Move] = [col for col in range(7) if board.state[0, col] == 0]
+    while True:
+        empty_columns: List[Move] = [
+            col for col in range(7) if board.state[0, col] == 0
+        ]
 
-    if not empty_columns:
-        # If this error ever occurs, then one forgot to check for a stalemate first
-        raise ValueError("No legal moves available")
+        if not empty_columns:
+            # If this error ever occurs, then one forgot to check for a stalemate first
+            raise ValueError("No legal moves available")
 
-    move = random.choice(empty_columns)
+        move = random.choice(empty_columns)
 
-    # Just to make sure, we also check if the move is legal
-    if not is_legal(board, move):
-        # retry
-        return random_move(board)
+        # make sure the move is legal, if not, try again
+        if not is_legal(board, move):
+            continue
 
-    return move
+        return move
 
 
 def is_in_terminal_state(board: ConnectFour) -> int:

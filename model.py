@@ -61,7 +61,7 @@ def get_next_model_move(
         else:
             move = distribution.sample()
 
-        # If the move is legal, return it
+        # make sure the move is legal, if not, try again
         if not is_legal(board, move):
             continue
 

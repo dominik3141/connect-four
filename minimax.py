@@ -10,7 +10,7 @@ import wandb
 
 def minimax_move(board: ConnectFour, depth: int = 3) -> int:
     """
-    Determine the best move for the AI player using the minimax algorithm with alpha-beta pruning.
+    Determine the best legal move for the AI player using the minimax algorithm with alpha-beta pruning.
     """
 
     def evaluate(board: ConnectFour) -> float:
@@ -84,7 +84,7 @@ def minimax_move(board: ConnectFour, depth: int = 3) -> int:
                     new_board = copy.deepcopy(board)
                     make_move(new_board, 2, move)
                     _, eval = minimax(new_board, depth - 1, alpha, beta, False)
-                    if eval > max_eval:
+                    if eval > max_eval or best_move == -1:
                         max_eval = eval
                         best_move = move
                     alpha = max(alpha, eval)
@@ -98,7 +98,7 @@ def minimax_move(board: ConnectFour, depth: int = 3) -> int:
                     new_board = copy.deepcopy(board)
                     make_move(new_board, 1, move)
                     _, eval = minimax(new_board, depth - 1, alpha, beta, True)
-                    if eval < min_eval:
+                    if eval < min_eval or best_move == -1:
                         min_eval = eval
                         best_move = move
                     beta = min(beta, eval)
@@ -107,6 +107,18 @@ def minimax_move(board: ConnectFour, depth: int = 3) -> int:
             return best_move, min_eval
 
     best_move, _ = minimax(board, depth, float("-inf"), float("inf"), True)
+
+    # Ensure the best move is legal
+    if not is_legal(board, best_move):
+        # If the best move is not legal, choose the first legal move
+        for move in range(7):
+            if is_legal(board, move):
+                return move
+
+    # final check if still not legal
+    if not is_legal(board, best_move):
+        raise ValueError("No legal moves available")
+
     return best_move
 
 
@@ -124,14 +136,16 @@ def play_against_minimax(
     while True:
         if current_player == 1:
             move = minimax_move(board, depth=depth)
-        else:
+        elif current_player == 2:
             move, prob = get_next_model_move(
                 model, board, temperature=temperature, epsilon=epsilon
             )
             ai_move_probs.append(prob)
 
+        # make the move
         board = make_move(board, current_player, move)
 
+        # check if the game is in a terminal state
         if is_in_terminal_state(board) != 0:
             break
 
@@ -157,26 +171,34 @@ def train_against_minimax(
     epsilon: float = 0,
     depth: int = 3,
 ) -> DecisionModel:
+    """
+    Train the model against the minimax opponent.
+    """
     from ai import loss_fn
     from evaluations import evaluate_model, log_evaluation_results
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+    # a new game is played every iteration
     for i in range(iterations):
         optimizer.zero_grad()
 
+        # play a game against minimax
         ai_move_probs, status = play_against_minimax(
             model, temperature=temperature, epsilon=epsilon, depth=depth
         )
 
+        # calculate the loss
         loss = loss_fn(ai_move_probs, status, player=2)  # always train as player 2
 
         # log the loss to wandb
         wandb.log({"loss": loss})
 
+        # backpropagate the loss
         loss.backward()
         optimizer.step()
 
+        # evaluate the model every eval_interval iterations
         if i % eval_interval == 0:
             eval_results = evaluate_model(model, num_games=eval_games)
             log_evaluation_results(run, eval_results, i)
