@@ -1,3 +1,4 @@
+import copy
 from engine import ConnectFour
 import engine
 from typing import Callable, Dict, Tuple
@@ -6,7 +7,7 @@ import torch
 from torch import Tensor
 
 
-def minimax_move(board: ConnectFour, depth: int = 4) -> int:
+def minimax_move(board: ConnectFour, depth: int = 1) -> int:
     def evaluate(board: ConnectFour) -> float:
         status = engine.is_in_terminal_state(board)
         if status == 1:
@@ -17,12 +18,12 @@ def minimax_move(board: ConnectFour, depth: int = 4) -> int:
             return 0
 
         score = 0
-        for row in range(6):  # Iterate over rows
-            for col in range(7):  # Iterate over columns
-                if board.state[row][col] == 0:
-                    score += count_potential_wins(
-                        board, row, col, 2
-                    ) - count_potential_wins(board, row, col, 1)
+        for col in range(7):  # Iterate over columns
+            row = next((r for r in range(5, -1, -1) if board.state[r][col] == 0), -1)
+            if row != -1:
+                score += count_potential_wins(
+                    board, row, col, 2
+                ) - count_potential_wins(board, row, col, 1)
         return score
 
     def count_potential_wins(
@@ -47,35 +48,46 @@ def minimax_move(board: ConnectFour, depth: int = 4) -> int:
         return True
 
     def minimax(
-        board: ConnectFour, depth: int, maximizing_player: bool
+        board: ConnectFour,
+        depth: int,
+        alpha: float,
+        beta: float,
+        maximizing_player: bool,
     ) -> Tuple[int, float]:
         if depth == 0 or engine.is_in_terminal_state(board) != 0:
             return -1, evaluate(board)
 
+        best_move = -1
         if maximizing_player:
             max_eval = float("-inf")
-            best_move = -1
             for move in range(7):
                 if engine.is_legal(board, move):
-                    new_board = engine.make_move(board, 2, move)
-                    _, eval = minimax(new_board, depth - 1, False)
+                    new_board = copy.deepcopy(board)
+                    engine.make_move(new_board, 2, move)
+                    _, eval = minimax(new_board, depth - 1, alpha, beta, False)
                     if eval > max_eval:
                         max_eval = eval
                         best_move = move
+                    alpha = max(alpha, eval)
+                    if beta <= alpha:
+                        break
             return best_move, max_eval
         else:
             min_eval = float("inf")
-            best_move = -1
             for move in range(7):
                 if engine.is_legal(board, move):
-                    new_board = engine.make_move(board, 1, move)
-                    _, eval = minimax(new_board, depth - 1, True)
+                    new_board = copy.deepcopy(board)
+                    engine.make_move(new_board, 1, move)
+                    _, eval = minimax(new_board, depth - 1, alpha, beta, True)
                     if eval < min_eval:
                         min_eval = eval
                         best_move = move
+                    beta = min(beta, eval)
+                    if beta <= alpha:
+                        break
             return best_move, min_eval
 
-    best_move, _ = minimax(board, depth, True)
+    best_move, _ = minimax(board, depth, float("-inf"), float("inf"), True)
     return best_move
 
 
