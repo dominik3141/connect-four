@@ -1,7 +1,6 @@
 import torch
 from torch import Tensor
 import wandb
-from evaluations import evaluate_model
 from model import DecisionModel
 from minimax import train_against_minimax
 
@@ -39,7 +38,7 @@ if __name__ == "__main__":
     eval_depth = 1
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
-    depth = 2  # depth for minimax
+    train_depth = 3  # depth for minimax
     # initialize the model
     model = DecisionModel()
 
@@ -53,19 +52,14 @@ if __name__ == "__main__":
             "learning_rate": learning_rate,
             "iterations": iterations,
             "eval_interval": eval_interval,
+            "eval_games": eval_games,
+            "eval_depth": eval_depth,
             "model_architecture": str(model),
             "temperature": temperature,
             "epsilon": epsilon,
-            "depth": depth,
+            "train_depth": train_depth,
         }
     )
-
-    # evaluate the untrained model
-    print("Model evaluation before training:")
-    initial_results = evaluate_model(
-        model, num_games=eval_games, depth_for_minimax=eval_depth
-    )
-    print(initial_results)
 
     model = train_against_minimax(
         model,
@@ -75,26 +69,14 @@ if __name__ == "__main__":
         eval_interval=eval_interval,
         temperature=temperature,
         epsilon=epsilon,
-        depth=depth,
+        depth=train_depth,
     )
-
-    # evaluate the trained model
-    print("Model evaluation after training:")
-    final_results = evaluate_model(
-        model, num_games=eval_games, depth_for_minimax=eval_depth
-    )
-    print(final_results)
 
     # save the model
     torch.save(model.state_dict(), "model.pth")
 
     # save the model to wandb
     wandb.save("model.pth")
-
-    # Log final comprehensive evaluation results to wandb
-    for opponent, results in final_results.items():
-        for outcome, count in results.items():
-            wandb.log({f"final_{opponent}_{outcome}": count})
 
     # Finish the wandb run
     run.finish()

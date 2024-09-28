@@ -72,6 +72,6 @@ def train_using_self_play(
         # Evaluate the model every eval_interval iterations
         if i % eval_interval == 0:
             eval_results = evaluate_model(model)
-            log_evaluation_results(run, eval_results, i)
+            log_evaluation_results(run, eval_results)
 
     return model

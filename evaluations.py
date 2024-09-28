@@ -74,17 +74,11 @@ def evaluate_model(
     return results
 
 
-def log_evaluation_results(
-    run: Any, eval_results: Dict[str, Dict[str, int]], iteration: int
-) -> None:
+def log_evaluation_results(run: Any, eval_results: Dict[str, Dict[str, int]]) -> None:
     """
-    Logs the evaluation results to the provided run object.
+    Logs the win rate for each opponent to the provided run object.
     """
-    total_games = sum(sum(results.values()) for results in eval_results.values())
-    total_wins = sum(results["wins"] for results in eval_results.values())
-    win_rate = total_wins / total_games
-
-    run.log({"win_rate": win_rate, "iteration": iteration})
     for opponent, results in eval_results.items():
-        for outcome, count in results.items():
-            run.log({f"{opponent}_{outcome}": count, "iteration": iteration})
+        total_games = sum(results.values())
+        win_rate = results["wins"] / total_games if total_games > 0 else 0
+        run.log({f"{opponent}_win_rate": win_rate})

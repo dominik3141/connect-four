@@ -201,6 +201,6 @@ def train_against_minimax(
         # evaluate the model every eval_interval iterations
         if i % eval_interval == 0:
             eval_results = evaluate_model(model, num_games=eval_games)
-            log_evaluation_results(run, eval_results, i)
+            log_evaluation_results(run, eval_results)
 
     return model
