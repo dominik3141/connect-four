@@ -48,6 +48,54 @@
             padding: 10px 20px;
             font-size: 1em;
         }
+
+        select,
+        button {
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            background-color: white;
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+
+        select:hover,
+        button:hover {
+            border-color: #888;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        select:focus,
+        button:focus {
+            outline: none;
+            border-color: #0099ff;
+            box-shadow: 0 0 0 2px rgba(0, 153, 255, 0.2);
+        }
+
+        button {
+            cursor: pointer;
+            background-color: #f0f0f0;
+        }
+
+        button:active {
+            background-color: #e0e0e0;
+        }
+
+        #opponent-select {
+            margin-right: 10px;
+        }
+
+        #depth-container {
+            display: inline-block;
+            margin-left: 20px;
+        }
+
+        #depth-input {
+            width: 50px;
+            padding: 6px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
     </style>
 </head>
 
@@ -84,7 +132,7 @@
 
         opponentSelect.addEventListener('change', function () {
             if (this.value === 'minimax') {
-                depthContainer.style.display = 'block';
+                depthContainer.style.display = 'inline-block';  // Changed from 'block' to 'inline-block'
             } else {
                 depthContainer.style.display = 'none';
             }
