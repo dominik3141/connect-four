@@ -6,7 +6,7 @@ from minimax import train_against_minimax
 
 
 def loss_fn(
-    probs: Tensor, outcome: int, player: int = 2, gamma: float = 0.95
+    probs: Tensor, outcome: int, player: int = 2, gamma: float = 0.95, run=None
 ) -> Tensor:
     if outcome == 3:  # Draw
         reward = -2.0
@@ -27,21 +27,36 @@ def loss_fn(
     # normalize the loss
     loss = loss / num_moves
 
+    # change the sign of the loss
+    loss = -loss
+
+    # log the reward to wandb
+    if run is not None:
+        run.log({"reward": reward})
+
+    print(f"DEBUG: reward: {reward}, discounted_rewards: {discounted_rewards}")
+    print(f"DEBUG: probs: {probs}, log_probs: {log_probs}")
+    print(f"DEBUG: loss: {loss}")
+
     return loss
 
 
 if __name__ == "__main__":
     # HYPERPARAMETERS
-    learning_rate = 0.0025
+    learning_rate = 0.0005
     iterations = 1000
     eval_interval = 200
     eval_games = 10
     eval_depth = 1
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
-    train_depth = 3  # depth for minimax
+    train_depth = 5  # depth for minimax
+
     # initialize the model
     model = DecisionModel()
+
+    # load the weights from the previous run
+    model.load_state_dict(torch.load("model.pth"))
 
     # Initialize wandb
     run = wandb.init(project="connect_four")

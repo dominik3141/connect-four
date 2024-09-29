@@ -153,6 +153,11 @@ def play_against_minimax(
 
     status = is_in_terminal_state(board)
 
+    # print the board if the ai won
+    if status == 2:
+        print("AI won!")
+        print(board)
+
     # Reverse the move probabilities for correct discounting
     ai_move_probs.reverse()
     ai_move_probs_tensor = torch.stack(ai_move_probs)
@@ -189,7 +194,9 @@ def train_against_minimax(
         )
 
         # calculate the loss
-        loss = loss_fn(ai_move_probs, status, player=2)  # always train as player 2
+        loss = loss_fn(
+            ai_move_probs, status, player=2, run=run
+        )  # always train as player 2
 
         # log the loss to wandb
         wandb.log({"loss": loss})
