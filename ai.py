@@ -48,14 +48,15 @@ def loss_fn(
 
 if __name__ == "__main__":
     # HYPERPARAMETERS
-    learning_rate = 0.001
-    iterations = 1000000
+    learning_rate = 0.01
+    iterations = 1000
     eval_interval = 200
     eval_games = 10
     eval_depth = 1
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
     train_depth = 2  # depth for minimax
+    batch_size = 64
 
     # initialize the model
     model = DecisionModel()
@@ -79,6 +80,7 @@ if __name__ == "__main__":
             "temperature": temperature,
             "epsilon": epsilon,
             "train_depth": train_depth,
+            "batch_size": batch_size,
         }
     )
 
@@ -91,6 +93,7 @@ if __name__ == "__main__":
         temperature=temperature,
         epsilon=epsilon,
         depth=train_depth,
+        batch_size=batch_size,
     )
 
     # save the model

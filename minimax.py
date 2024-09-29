@@ -1,5 +1,5 @@
 from engine import ConnectFour
-from typing import Tuple
+from typing import Tuple, List
 import copy
 from engine import is_in_terminal_state, make_move, is_legal
 from model import DecisionModel, get_next_model_move
@@ -165,6 +165,28 @@ def play_against_minimax(
     return ai_move_probs_tensor, status
 
 
+def play_batch_against_minimax(
+    model: DecisionModel,
+    batch_size: int,
+    temperature: float = 1.0,
+    epsilon: float = 0,
+    depth: int = 3,
+) -> Tuple[List[Tensor], List[int]]:
+    """
+    Play a batch of games where the model plays against the minimax opponent.
+    Returns a list of move probabilities for the model and a list of game outcomes.
+    """
+    batch_probs = []
+    batch_outcomes = []
+
+    for _ in range(batch_size):
+        probs, outcome = play_against_minimax(model, temperature, epsilon, depth)
+        batch_probs.append(probs)
+        batch_outcomes.append(outcome)
+
+    return batch_probs, batch_outcomes
+
+
 def train_against_minimax(
     model: DecisionModel,
     iterations: int = 100,
@@ -175,6 +197,7 @@ def train_against_minimax(
     temperature: float = 1.0,
     epsilon: float = 0,
     depth: int = 3,
+    batch_size: int = 64,
 ) -> DecisionModel:
     """
     Train the model against the minimax opponent.
@@ -182,31 +205,33 @@ def train_against_minimax(
     from ai import loss_fn
     from evaluations import evaluate_model, log_evaluation_results
 
-    # optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
 
-    # a new game is played every iteration
     for i in range(iterations):
         optimizer.zero_grad()
 
-        # play a game against minimax
-        ai_move_probs, status = play_against_minimax(
-            model, temperature=temperature, epsilon=epsilon, depth=depth
+        # Play a batch of games against minimax
+        batch_probs, batch_outcomes = play_batch_against_minimax(
+            model, batch_size, temperature, epsilon, depth
         )
 
-        # calculate the loss
-        loss = loss_fn(
-            ai_move_probs, status, player=2, run=run
-        )  # always train as player 2
+        # Calculate the loss for the batch
+        batch_loss = torch.tensor(0.0, requires_grad=True)
+        for probs, outcome in zip(batch_probs, batch_outcomes):
+            loss = loss_fn(probs, outcome, player=2, run=run)
+            batch_loss = batch_loss + loss
 
-        # log the loss to wandb
-        wandb.log({"loss": loss})
+        # Average the loss over the batch
+        batch_loss = batch_loss / batch_size
 
-        # backpropagate the loss
-        loss.backward()
+        # Log the average loss to wandb
+        wandb.log({"loss": batch_loss.item()})
+
+        # Backpropagate the loss
+        batch_loss.backward()
         optimizer.step()
 
-        # evaluate the model every eval_interval iterations
+        # Evaluate the model every eval_interval iterations
         if i % eval_interval == 0:
             eval_results = evaluate_model(model, num_games=eval_games)
             log_evaluation_results(run, eval_results)
