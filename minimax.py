@@ -182,7 +182,8 @@ def train_against_minimax(
     from ai import loss_fn
     from evaluations import evaluate_model, log_evaluation_results
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    # optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
 
     # a new game is played every iteration
     for i in range(iterations):

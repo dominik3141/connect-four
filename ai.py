@@ -20,14 +20,19 @@ def loss_fn(
     discounted_rewards = discount_factors * reward
 
     # Calculate log probabilities
-    log_probs = torch.log(probs + 1e-8)  # Add small epsilon to avoid log(0)
+    epsilon = 1e-8
+    log_probs = torch.log(1 + probs + epsilon)  # Add small epsilon to avoid log(0)
+
+    loss_non_log = torch.sum(discounted_rewards * probs)  # element-wise product
+
+    print(f"DEBUG: loss_non_log: {-loss_non_log}")
 
     loss = torch.sum(discounted_rewards * log_probs)  # element-wise product
 
     # normalize the loss
     loss = loss / num_moves
 
-    # change the sign of the loss
+    # change the sign of the loss (in order for rewards to be maximized)
     loss = -loss
 
     # log the reward to wandb
@@ -43,20 +48,20 @@ def loss_fn(
 
 if __name__ == "__main__":
     # HYPERPARAMETERS
-    learning_rate = 0.0005
-    iterations = 1000
+    learning_rate = 0.001
+    iterations = 1000000
     eval_interval = 200
     eval_games = 10
     eval_depth = 1
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
-    train_depth = 5  # depth for minimax
+    train_depth = 2  # depth for minimax
 
     # initialize the model
     model = DecisionModel()
 
     # load the weights from the previous run
-    model.load_state_dict(torch.load("model.pth"))
+    # model.load_state_dict(torch.load("model.pth"))
 
     # Initialize wandb
     run = wandb.init(project="connect_four")
