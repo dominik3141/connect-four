@@ -12,36 +12,44 @@ def loss_fn(
     player: int = 2,
     gamma: float = 0.5,
 ) -> Tensor:
-    # def calc_win_reward(win_ratio: float) -> float:
-    #     return max(
-    #         200 * (1 - win_ratio), 10
-    #     )  # if winning is sparse, the reward is higher
-
     def calc_win_reward(win_ratio: float) -> float:
-        return 10
+        return max(
+            200 * (1 - win_ratio), 10
+        )  # if winning is sparse, the reward is higher
 
     if win_ratio is not None:
         win_reward = calc_win_reward(win_ratio)
     else:  # if no win ratio is provided, the reward is 5
         win_reward = 5
 
-    wandb.log({"win_reward": win_reward})
+    if wandb.run is not None:
+        wandb.log({"win_reward": win_reward})
 
     if outcome == 3:  # Draw
         reward = -2.0
     elif outcome == player:  # Player wins
         reward = win_reward
+    elif outcome == 0:  # invalid outcome
+        # crash the program
+        raise ValueError("Invalid outcome")
     else:  # Player loses
         reward = -5.0
+
+    # Modify reward based on confidence (probs)
+    # For wins: lower confidence => higher reward
+    # For losses: higher confidence => higher penalty
+    if outcome == player:
+        # Reverse confidence scaling for smart moves with low confidence
+        reward = reward * (2 - probs)  # More reward for lower confidence
+    else:
+        # Increase penalty for high-confidence bad moves
+        reward = reward * probs  # More penalty for higher confidence
 
     num_moves = len(probs)
     discount_factors = torch.tensor([gamma**i for i in range(num_moves)])
     discounted_rewards = discount_factors * reward
 
-    loss = torch.sum(discounted_rewards * probs)  # element-wise product
-
-    # normalize the loss
-    # loss = loss / num_moves
+    loss = torch.sum(discounted_rewards)
 
     # normalize the loss smarter
     loss = loss / sum(discount_factors)
@@ -50,7 +58,8 @@ def loss_fn(
     loss = -loss
 
     # log the reward to wandb
-    wandb.log({"reward": reward})
+    if wandb.run is not None:
+        wandb.log({"reward": reward})
 
     print(f"DEBUG: reward: {reward}, discounted_rewards: {discounted_rewards}")
     # print(f"DEBUG: probs: {probs}, log_probs: {log_probs}")
