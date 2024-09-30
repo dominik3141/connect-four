@@ -1,9 +1,10 @@
 from engine import ConnectFour
 import engine
-from typing import Callable, Dict, Any
+from typing import Callable, Dict
 from model import DecisionModel, get_next_model_move
 from minimax import minimax_move
 from functools import partial
+import wandb
 
 
 def play_against_opponent(
@@ -75,7 +76,7 @@ def evaluate_model(
     return results
 
 
-def log_evaluation_results(run: Any, eval_results: Dict[str, Dict[str, int]]) -> None:
+def log_evaluation_results(eval_results: Dict[str, Dict[str, int]]) -> None:
     """
     Logs the win rate for each opponent to the provided run object.
 
@@ -91,4 +92,4 @@ def log_evaluation_results(run: Any, eval_results: Dict[str, Dict[str, int]]) ->
     for opponent, results in eval_results.items():
         total_games = sum(results.values())
         win_rate = results["wins"] / total_games if total_games > 0 else 0
-        run.log({f"{opponent}_win_rate": win_rate})
+        wandb.log({f"{opponent}_win_rate": win_rate})

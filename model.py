@@ -68,4 +68,5 @@ def get_next_model_move(
             continue
 
         probability = probs[move]
+
         return move, probability

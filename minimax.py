@@ -171,7 +171,8 @@ def play_batch_against_minimax(
     temperature: float = 1.0,
     epsilon: float = 0,
     depth: int = 3,
-) -> Tuple[List[Tensor], List[int]]:
+    run=None,
+) -> Tuple[List[Tensor], List[int], float]:
     """
     Play a batch of games where the model plays against the minimax opponent.
     Returns a list of move probabilities for the model and a list of game outcomes.
@@ -184,14 +185,24 @@ def play_batch_against_minimax(
         batch_probs.append(probs)
         batch_outcomes.append(outcome)
 
-    return batch_probs, batch_outcomes
+    # log the win rate (outcome == 2)
+    win_rate = sum(o == 2 for o in batch_outcomes) / batch_size
+    wandb.log({"win_rate": win_rate})
+
+    # model confidence
+    model_confidence = (
+        sum(sum(q.item() for q in probs) / len(probs) for probs in batch_probs)
+        / batch_size
+    )
+    wandb.log({"model_confidence": model_confidence})
+
+    return batch_probs, batch_outcomes, win_rate
 
 
 def train_against_minimax(
     model: DecisionModel,
     iterations: int = 100,
     learning_rate: float = 0.01,
-    run=None,
     eval_interval: int = 100,
     eval_games: int = 100,
     temperature: float = 1.0,
@@ -211,14 +222,14 @@ def train_against_minimax(
         optimizer.zero_grad()
 
         # Play a batch of games against minimax
-        batch_probs, batch_outcomes = play_batch_against_minimax(
+        batch_probs, batch_outcomes, win_rate = play_batch_against_minimax(
             model, batch_size, temperature, epsilon, depth
         )
 
         # Calculate the loss for the batch
         batch_loss = torch.tensor(0.0, requires_grad=True)
         for probs, outcome in zip(batch_probs, batch_outcomes):
-            loss = loss_fn(probs, outcome, player=2, run=run)
+            loss = loss_fn(probs, outcome, win_rate, player=2)
             batch_loss = batch_loss + loss
 
         # Average the loss over the batch
@@ -234,6 +245,6 @@ def train_against_minimax(
         # Evaluate the model every eval_interval iterations
         if i % eval_interval == 0:
             eval_results = evaluate_model(model, num_games=eval_games)
-            log_evaluation_results(run, eval_results)
+            log_evaluation_results(eval_results)
 
     return model

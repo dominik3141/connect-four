@@ -6,12 +6,31 @@ from minimax import train_against_minimax
 
 
 def loss_fn(
-    probs: Tensor, outcome: int, player: int = 2, gamma: float = 0.95, run=None
+    probs: Tensor,
+    outcome: int,
+    win_ratio: float = None,
+    player: int = 2,
+    gamma: float = 0.5,
 ) -> Tensor:
+    # def calc_win_reward(win_ratio: float) -> float:
+    #     return max(
+    #         200 * (1 - win_ratio), 10
+    #     )  # if winning is sparse, the reward is higher
+
+    def calc_win_reward(win_ratio: float) -> float:
+        return 10
+
+    if win_ratio is not None:
+        win_reward = calc_win_reward(win_ratio)
+    else:  # if no win ratio is provided, the reward is 5
+        win_reward = 5
+
+    wandb.log({"win_reward": win_reward})
+
     if outcome == 3:  # Draw
         reward = -2.0
     elif outcome == player:  # Player wins
-        reward = 4.0
+        reward = win_reward
     else:  # Player loses
         reward = -5.0
 
@@ -19,28 +38,23 @@ def loss_fn(
     discount_factors = torch.tensor([gamma**i for i in range(num_moves)])
     discounted_rewards = discount_factors * reward
 
-    # Calculate log probabilities
-    epsilon = 1e-8
-    log_probs = torch.log(1 + probs + epsilon)  # Add small epsilon to avoid log(0)
-
-    loss_non_log = torch.sum(discounted_rewards * probs)  # element-wise product
-
-    print(f"DEBUG: loss_non_log: {-loss_non_log}")
-
-    loss = torch.sum(discounted_rewards * log_probs)  # element-wise product
+    loss = torch.sum(discounted_rewards * probs)  # element-wise product
 
     # normalize the loss
-    loss = loss / num_moves
+    # loss = loss / num_moves
+
+    # normalize the loss smarter
+    loss = loss / sum(discount_factors)
 
     # change the sign of the loss (in order for rewards to be maximized)
     loss = -loss
 
     # log the reward to wandb
-    if run is not None:
-        run.log({"reward": reward})
+    wandb.log({"reward": reward})
 
     print(f"DEBUG: reward: {reward}, discounted_rewards: {discounted_rewards}")
-    print(f"DEBUG: probs: {probs}, log_probs: {log_probs}")
+    # print(f"DEBUG: probs: {probs}, log_probs: {log_probs}")
+    print(f"DEBUG: probs: {probs}")
     print(f"DEBUG: loss: {loss}")
 
     return loss
@@ -49,26 +63,28 @@ def loss_fn(
 if __name__ == "__main__":
     # HYPERPARAMETERS
     learning_rate = 0.01
-    iterations = 1000
+    iterations = 500
     eval_interval = 200
     eval_games = 10
     eval_depth = 1
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
-    train_depth = 2  # depth for minimax
-    batch_size = 64
+    train_depth = 1  # depth for minimax
+    batch_size = 128
+    load_model = False
 
     # initialize the model
     model = DecisionModel()
 
     # load the weights from the previous run
-    # model.load_state_dict(torch.load("model.pth"))
+    if load_model:
+        model.load_state_dict(torch.load("model.pth"))
 
     # Initialize wandb
     run = wandb.init(project="connect_four")
 
     # log the model architecture
-    wandb.watch(model, log="all", log_freq=10)
+    wandb.watch(model, log="all", log_freq=2)
     wandb.config.update(
         {
             "learning_rate": learning_rate,
@@ -81,6 +97,7 @@ if __name__ == "__main__":
             "epsilon": epsilon,
             "train_depth": train_depth,
             "batch_size": batch_size,
+            "load_model": load_model,
         }
     )
 
@@ -88,7 +105,6 @@ if __name__ == "__main__":
         model,
         iterations=iterations,
         learning_rate=learning_rate,
-        run=run,
         eval_interval=eval_interval,
         temperature=temperature,
         epsilon=epsilon,
