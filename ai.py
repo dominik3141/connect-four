@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 import wandb
 from model import DecisionModel
-from minimax import train_against_minimax
+from minimax import train_against_minimax_supervised
 
 
 def loss_fn(
@@ -78,7 +78,8 @@ if __name__ == "__main__":
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
     gamma = 0.95
-    train_depth = 1  # depth for minimax
+    depth_teacher = 3
+    depth_opponent = 1
     batch_size = 128
     load_model = False
 
@@ -105,22 +106,25 @@ if __name__ == "__main__":
             "temperature": temperature,
             "epsilon": epsilon,
             "gamma": gamma,
-            "train_depth": train_depth,
+            "depth_teacher": depth_teacher,
+            "depth_opponent": depth_opponent,
             "batch_size": batch_size,
             "load_model": load_model,
         }
     )
 
-    model = train_against_minimax(
+    model = train_against_minimax_supervised(
         model,
         iterations=iterations,
         learning_rate=learning_rate,
         eval_interval=eval_interval,
+        eval_games=eval_games,
         temperature=temperature,
         epsilon=epsilon,
-        depth=train_depth,
-        batch_size=batch_size,
         gamma=gamma,
+        depth_teacher=depth_teacher,
+        depth_opponent=depth_opponent,
+        batch_size=batch_size,
     )
 
     # save the model

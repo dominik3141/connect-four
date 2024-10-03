@@ -34,7 +34,7 @@ def get_next_model_move(
     model: DecisionModel,
     board: ConnectFour,
     temperature: float = 1.0,
-    epsilon: float = 0,
+    epsilon: float = 0,  # epsilon-greedy parameter
 ) -> Tuple[Move, Tensor]:
     """
     Return the move and the probability of the move, ensuring only legal moves are selected.

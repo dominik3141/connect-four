@@ -253,3 +253,97 @@ def train_against_minimax(
             log_evaluation_results(eval_results)
 
     return model
+
+
+def train_against_minimax_supervised(
+    model: DecisionModel,
+    iterations: int = 1000,
+    learning_rate: float = 0.01,
+    eval_interval: int = 100,
+    eval_games: int = 100,
+    temperature: float = 1.0,
+    epsilon: float = 0,
+    gamma: float = 0.9,
+    depth_teacher: int = 3,
+    depth_opponent: int = 1,
+    batch_size: int = 128,
+) -> DecisionModel:
+    """
+    Train the model using two minimax players. One minimax opponent and one minimax teacher.
+    The model is trained to predict the teacher's moves.
+    """
+    from torch.nn import functional as F
+    from evaluations import evaluate_model, log_evaluation_results
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+    for i in range(iterations):
+        optimizer.zero_grad()
+        batch_loss = torch.tensor(0.0, requires_grad=True)
+        correct_predictions = 0
+        total_moves = 0
+
+        for _ in range(batch_size):
+            board = ConnectFour()
+            game_moves = []  # list of tuples (model_output, teacher_move)
+
+            current_player = 1
+            while True:
+                if current_player == 1:  # Minimax opponent's turn
+                    move = minimax_move(board, depth=depth_opponent)
+                else:  # Model's turn (trying to predict teacher's move)
+                    teacher_move = minimax_move(board, depth=depth_teacher)
+                    model_output = model(torch.Tensor(board.state))
+                    move, _ = get_next_model_move(model, board, temperature, epsilon)
+
+                    game_moves.append((model_output, teacher_move))
+
+                    if move == teacher_move:
+                        correct_predictions += 1
+                    total_moves += 1
+
+                board = make_move(board, current_player, move)
+
+                current_player = 3 - current_player
+
+                if is_in_terminal_state(board) != 0:
+                    # print(f"Game ended with status: {is_in_terminal_state(board)}")
+                    # print(board)
+                    # print(game_moves)
+                    break
+
+            # Calculate loss for this game
+            for model_output, teacher_move in game_moves:
+                loss = F.cross_entropy(
+                    model_output.unsqueeze(0), torch.tensor([teacher_move])
+                )
+                batch_loss = batch_loss + loss
+
+        # Normalize the loss
+        batch_loss = batch_loss / batch_size
+
+        # Backpropagate the loss
+        batch_loss.backward()
+        optimizer.step()
+
+        # Calculate accuracy
+        accuracy = correct_predictions / total_moves if total_moves > 0 else 0
+
+        # Log metrics
+        wandb.log(
+            {
+                "supervised_loss": batch_loss.item(),
+                "accuracy": accuracy,
+            }
+        )
+
+        # Evaluate the model every eval_interval iterations
+        if i % eval_interval == 0:
+            eval_results = evaluate_model(model, num_games=eval_games)
+            log_evaluation_results(eval_results)
+
+        print(
+            f"Batch {i+1}/{iterations}, Loss: {batch_loss.item():.4f}, Accuracy: {accuracy:.4f}"
+        )
+
+    return model
