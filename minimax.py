@@ -271,11 +271,15 @@ def train_against_minimax_supervised(
     """
     Train the model using two minimax players. One minimax opponent and one minimax teacher.
     The model is trained to predict the teacher's moves.
+    Stops early if accuracy is above 95% for 5 or more consecutive batches.
     """
     from torch.nn import functional as F
     from evaluations import evaluate_model, log_evaluation_results
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+    high_accuracy_count = 0
+    accuracy_threshold = 0.95
 
     for i in range(iterations):
         optimizer.zero_grad()
@@ -328,6 +332,17 @@ def train_against_minimax_supervised(
 
         # Calculate accuracy
         accuracy = correct_predictions / total_moves if total_moves > 0 else 0
+
+        # Check for early stopping
+        if accuracy > accuracy_threshold:
+            high_accuracy_count += 1
+            if high_accuracy_count >= 5:
+                print(
+                    f"Early stopping at batch {i+1} due to high accuracy for 5 consecutive batches."
+                )
+                break
+        else:
+            high_accuracy_count = 0
 
         # Log metrics
         wandb.log(

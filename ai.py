@@ -71,9 +71,9 @@ def loss_fn(
 if __name__ == "__main__":
     # HYPERPARAMETERS
     learning_rate = 0.005
-    iterations = 10000
-    eval_interval = 200
-    eval_games = 10
+    iterations = 100
+    eval_interval = 5
+    eval_games = 50
     eval_depth = 1
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
