@@ -185,30 +185,20 @@ def play_batch_against_minimax(
         batch_probs.append(probs)
         batch_outcomes.append(outcome)
 
-    # log the win rate (outcome == 2)
-    win_rate = sum(o == 2 for o in batch_outcomes) / batch_size
-    wandb.log({"win_rate": win_rate})
-
-    # model confidence
-    model_confidence = (
-        sum(sum(q.item() for q in probs) / len(probs) for probs in batch_probs)
-        / batch_size
-    )
-    wandb.log({"model_confidence": model_confidence})
-
-    return batch_probs, batch_outcomes, win_rate
+    return batch_probs, batch_outcomes
 
 
 def train_against_minimax(
     model: DecisionModel,
-    iterations: int = 100,
+    iterations: int = 1000,
     learning_rate: float = 0.01,
     eval_interval: int = 100,
     eval_games: int = 100,
     temperature: float = 1.0,
     epsilon: float = 0,
+    gamma: float = 0.9,
     depth: int = 3,
-    batch_size: int = 64,
+    batch_size: int = 128,
 ) -> DecisionModel:
     """
     Train the model against the minimax opponent.
@@ -222,21 +212,36 @@ def train_against_minimax(
         optimizer.zero_grad()
 
         # Play a batch of games against minimax
-        batch_probs, batch_outcomes, win_rate = play_batch_against_minimax(
+        batch_probs, batch_outcomes = play_batch_against_minimax(
             model, batch_size, temperature, epsilon, depth
         )
+
+        # calculate the winrate
+        win_rate = sum(o == 2 for o in batch_outcomes) / batch_size
 
         # Calculate the loss for the batch
         batch_loss = torch.tensor(0.0, requires_grad=True)
         for probs, outcome in zip(batch_probs, batch_outcomes):
-            loss = loss_fn(probs, outcome, win_rate, player=2)
+            loss = loss_fn(probs, outcome, win_rate, player=2, gamma=gamma)
             batch_loss = batch_loss + loss
 
-        # Average the loss over the batch
+        # Normalize the loss
         batch_loss = batch_loss / batch_size
 
-        # Log the average loss to wandb
-        wandb.log({"loss": batch_loss.item()})
+        # model confidence
+        model_confidence = (
+            sum(sum(q.item() for q in probs) / len(probs) for probs in batch_probs)
+            / batch_size
+        )
+
+        # Log the average loss, win rate and model confidence to wandb
+        wandb.log(
+            {
+                "loss": batch_loss.item(),
+                "win_rate": win_rate,
+                "model_confidence": model_confidence,
+            }
+        )
 
         # Backpropagate the loss
         batch_loss.backward()

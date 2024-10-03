@@ -26,30 +26,30 @@ def loss_fn(
         wandb.log({"win_reward": win_reward})
 
     if outcome == 3:  # Draw
-        reward = -2.0
+        reward = -0.5
     elif outcome == player:  # Player wins
         reward = win_reward
     elif outcome == 0:  # invalid outcome
         # crash the program
         raise ValueError("Invalid outcome")
     else:  # Player loses
-        reward = -5.0
+        reward = -1.0
 
     # Modify reward based on confidence (probs)
     # For wins: lower confidence => higher reward
     # For losses: higher confidence => higher penalty
-    if outcome == player:
-        # Reverse confidence scaling for smart moves with low confidence
-        reward = reward * (2 - probs)  # More reward for lower confidence
-    else:
-        # Increase penalty for high-confidence bad moves
-        reward = reward * probs  # More penalty for higher confidence
+    # if outcome == player:
+    #     # Reverse confidence scaling for smart moves with low confidence
+    #     discounted_losses = reward * (2 - probs)  # More reward for lower confidence
+    # else:
+    #     # Increase penalty for high-confidence bad moves
+    #     discounted_losses = reward * probs  # More penalty for higher confidence
 
     num_moves = len(probs)
     discount_factors = torch.tensor([gamma**i for i in range(num_moves)])
-    discounted_rewards = discount_factors * reward
+    discounted_losses = reward * discount_factors * probs
 
-    loss = torch.sum(discounted_rewards)
+    loss = torch.sum(discounted_losses)
 
     # normalize the loss smarter
     loss = loss / sum(discount_factors)
@@ -61,8 +61,7 @@ def loss_fn(
     if wandb.run is not None:
         wandb.log({"reward": reward})
 
-    print(f"DEBUG: reward: {reward}, discounted_rewards: {discounted_rewards}")
-    # print(f"DEBUG: probs: {probs}, log_probs: {log_probs}")
+    print(f"DEBUG: reward: {reward}, discounted_losses: {discounted_losses}")
     print(f"DEBUG: probs: {probs}")
     print(f"DEBUG: loss: {loss}")
 
@@ -71,13 +70,14 @@ def loss_fn(
 
 if __name__ == "__main__":
     # HYPERPARAMETERS
-    learning_rate = 0.01
-    iterations = 500
+    learning_rate = 0.005
+    iterations = 10000
     eval_interval = 200
     eval_games = 10
     eval_depth = 1
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
+    gamma = 0.95
     train_depth = 1  # depth for minimax
     batch_size = 128
     load_model = False
@@ -93,7 +93,7 @@ if __name__ == "__main__":
     run = wandb.init(project="connect_four")
 
     # log the model architecture
-    wandb.watch(model, log="all", log_freq=2)
+    wandb.watch(model, log="all", log_freq=batch_size)
     wandb.config.update(
         {
             "learning_rate": learning_rate,
@@ -104,6 +104,7 @@ if __name__ == "__main__":
             "model_architecture": str(model),
             "temperature": temperature,
             "epsilon": epsilon,
+            "gamma": gamma,
             "train_depth": train_depth,
             "batch_size": batch_size,
             "load_model": load_model,
@@ -119,6 +120,7 @@ if __name__ == "__main__":
         epsilon=epsilon,
         depth=train_depth,
         batch_size=batch_size,
+        gamma=gamma,
     )
 
     # save the model
