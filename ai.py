@@ -71,17 +71,18 @@ def loss_fn(
 if __name__ == "__main__":
     # HYPERPARAMETERS
     learning_rate = 0.005
-    iterations = 100
+    batches = 10
     eval_interval = 5
     eval_games = 50
     eval_depth = 1
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
     gamma = 0.95
-    depth_teacher = 3
-    depth_opponent = 1
-    batch_size = 128
-    load_model = False
+    depth_teacher = 7
+    depth_opponent = 2
+    batch_size = 1
+    load_model = True
+    save_model = False
 
     # initialize the model
     model = DecisionModel()
@@ -93,12 +94,16 @@ if __name__ == "__main__":
     # Initialize wandb
     run = wandb.init(project="connect_four")
 
+    # count the number of parameters in the model
+    num_params = sum(p.numel() for p in model.parameters())
+    print(f"Number of parameters: {num_params}")
+
     # log the model architecture
     wandb.watch(model, log="all", log_freq=batch_size)
     wandb.config.update(
         {
             "learning_rate": learning_rate,
-            "iterations": iterations,
+            "iterations": batches,
             "eval_interval": eval_interval,
             "eval_games": eval_games,
             "eval_depth": eval_depth,
@@ -110,12 +115,13 @@ if __name__ == "__main__":
             "depth_opponent": depth_opponent,
             "batch_size": batch_size,
             "load_model": load_model,
+            "num_params": num_params,
         }
     )
 
     model = train_against_minimax_supervised(
         model,
-        iterations=iterations,
+        batches=batches,
         learning_rate=learning_rate,
         eval_interval=eval_interval,
         eval_games=eval_games,
@@ -127,11 +133,12 @@ if __name__ == "__main__":
         batch_size=batch_size,
     )
 
-    # save the model
-    torch.save(model.state_dict(), "model.pth")
+    if save_model:
+        # save the model
+        torch.save(model.state_dict(), "model.pth")
 
-    # save the model to wandb
-    wandb.save("model.pth")
+        # save the model to wandb
+        wandb.save("model.pth")
 
     # Finish the wandb run
     run.finish()

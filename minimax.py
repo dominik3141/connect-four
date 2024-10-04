@@ -257,7 +257,7 @@ def train_against_minimax(
 
 def train_against_minimax_supervised(
     model: DecisionModel,
-    iterations: int = 1000,
+    batches: int = 1000,
     learning_rate: float = 0.01,
     eval_interval: int = 100,
     eval_games: int = 100,
@@ -281,11 +281,13 @@ def train_against_minimax_supervised(
     high_accuracy_count = 0
     accuracy_threshold = 0.95
 
-    for i in range(iterations):
+    for i in range(batches):
         optimizer.zero_grad()
         batch_loss = torch.tensor(0.0, requires_grad=True)
         correct_predictions = 0
         total_moves = 0
+        wins = 0
+        draws = 0
 
         for _ in range(batch_size):
             board = ConnectFour()
@@ -311,9 +313,13 @@ def train_against_minimax_supervised(
                 current_player = 3 - current_player
 
                 if is_in_terminal_state(board) != 0:
-                    # print(f"Game ended with status: {is_in_terminal_state(board)}")
-                    # print(board)
-                    # print(game_moves)
+                    status = is_in_terminal_state(board)
+                    if status == 2:
+                        wins += 1
+                    elif status == 3:
+                        draws += 1
+
+                    print(board)
                     break
 
             # Calculate loss for this game
@@ -330,8 +336,25 @@ def train_against_minimax_supervised(
         batch_loss.backward()
         optimizer.step()
 
-        # Calculate accuracy
+        # Calculate accuracy and rates
         accuracy = correct_predictions / total_moves if total_moves > 0 else 0
+        win_rate = wins / batch_size
+        draw_rate = draws / batch_size
+
+        # Print statistics
+        print(f"Batch {i+1}/{batches}")
+        print(f"Loss: {batch_loss.item():.4f}, Accuracy: {accuracy:.4f}")
+        print(f"Win rate: {win_rate:.2f}, Draw rate: {draw_rate:.2f}")
+
+        # Log metrics to wandb
+        wandb.log(
+            {
+                "supervised_loss": batch_loss.item(),
+                "accuracy": accuracy,
+                "win_rate": win_rate,
+                "draw_rate": draw_rate,
+            }
+        )
 
         # Check for early stopping
         if accuracy > accuracy_threshold:
@@ -344,21 +367,9 @@ def train_against_minimax_supervised(
         else:
             high_accuracy_count = 0
 
-        # Log metrics
-        wandb.log(
-            {
-                "supervised_loss": batch_loss.item(),
-                "accuracy": accuracy,
-            }
-        )
-
         # Evaluate the model every eval_interval iterations
         if i % eval_interval == 0:
             eval_results = evaluate_model(model, num_games=eval_games)
             log_evaluation_results(eval_results)
-
-        print(
-            f"Batch {i+1}/{iterations}, Loss: {batch_loss.item():.4f}, Accuracy: {accuracy:.4f}"
-        )
 
     return model
