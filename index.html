@@ -122,6 +122,87 @@
                 margin-left: 0;
             }
         }
+
+        #game-controls {
+            margin-top: 20px;
+        }
+
+        #game-controls button {
+            margin: 0 5px;
+        }
+
+        #saved-games-list {
+            display: none;
+            margin-top: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        #saved-games-list button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            margin-bottom: 5px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0, 0, 0, 0.4);
+        }
+
+        .modal-content {
+            background-color: #fefefe;
+            margin: 15% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 800px;
+        }
+
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+
+        .close:hover,
+        .close:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f2f2f2;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+
+        tr:hover {
+            background-color: #f5f5f5;
+        }
     </style>
 </head>
 
@@ -139,8 +220,35 @@
         </div>
     </div>
     <div id="board"></div>
+    <div id="game-controls" style="display: none;">
+        <button id="prev-move">Previous Move</button>
+        <button id="next-move">Next Move</button>
+        <span id="move-counter">Move: 0 / 0</span>
+    </div>
     <div id="message"></div>
     <button id="reset">Reset Game</button>
+    <button id="load-saved-game">Load Saved Game</button>
+
+    <div id="savedGamesModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Saved Games</h2>
+            <table id="savedGamesTable">
+                <thead>
+                    <tr>
+                        <th>Date Played</th>
+                        <th>Winner</th>
+                        <th>Depth (P1/P2)</th>
+                        <th>Moves</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Saved games will be inserted here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
 
     <script>
         const rows = 6;
@@ -148,6 +256,8 @@
         let currentPlayer = 1; // Player 1 is the human
         let gameOver = false;
         let boardState = [];
+        let gameStates = [];
+        let currentStateIndex = 0;
 
         const boardElement = document.getElementById('board');
         const messageElement = document.getElementById('message');
@@ -156,6 +266,17 @@
         const opponentSelect = document.getElementById('opponent-select');
         const depthContainer = document.getElementById('depth-container');
         const depthInput = document.getElementById('depth-input');
+
+        const gameControls = document.getElementById('game-controls');
+        const prevMoveButton = document.getElementById('prev-move');
+        const nextMoveButton = document.getElementById('next-move');
+        const moveCounter = document.getElementById('move-counter');
+        const loadSavedGameButton = document.getElementById('load-saved-game');
+        const savedGamesList = document.getElementById('saved-games-list');
+
+        const modal = document.getElementById('savedGamesModal');
+        const closeBtn = document.getElementsByClassName('close')[0];
+        const savedGamesTable = document.getElementById('savedGamesTable').getElementsByTagName('tbody')[0];
 
         opponentSelect.addEventListener('change', function () {
             depthContainer.style.display = this.value === 'minimax' ? 'block' : 'none';
@@ -205,12 +326,110 @@
             }
         }
 
-        // Fetch the initial game state
+        function updateGameControls() {
+            gameControls.style.display = 'block';
+            prevMoveButton.disabled = currentStateIndex === 0;
+            nextMoveButton.disabled = currentStateIndex === gameStates.length - 1;
+            moveCounter.textContent = `Move: ${currentStateIndex} / ${gameStates.length - 1}`;
+        }
+
+        prevMoveButton.addEventListener('click', () => {
+            if (currentStateIndex > 0) {
+                currentStateIndex--;
+                initializeBoard(gameStates[currentStateIndex]);
+                updateGameControls();
+            }
+        });
+
+        nextMoveButton.addEventListener('click', () => {
+            if (currentStateIndex < gameStates.length - 1) {
+                currentStateIndex++;
+                initializeBoard(gameStates[currentStateIndex]);
+                updateGameControls();
+            }
+        });
+
+        loadSavedGameButton.onclick = async () => {
+            try {
+                const response = await fetch('/list_saved_games');
+                const data = await response.json();
+                if (data.saved_games && Array.isArray(data.saved_games)) {
+                    displaySavedGames(data.saved_games);
+                    modal.style.display = "block";
+                } else {
+                    console.error('Unexpected data format:', data);
+                    alert('Error loading saved games. Please check the console for details.');
+                }
+            } catch (error) {
+                console.error('Error fetching saved games:', error);
+                alert('Error loading saved games. Please check the console for details.');
+            }
+        };
+
+        closeBtn.onclick = () => {
+            modal.style.display = "none";
+        };
+
+        window.onclick = (event) => {
+            if (event.target == modal) {
+                modal.style.display = "none";
+            }
+        };
+
+        function displaySavedGames(games) {
+            savedGamesTable.innerHTML = '';
+            games.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+            games.forEach(game => {
+                const row = savedGamesTable.insertRow();
+                row.innerHTML = `
+                    <td>${new Date(game.timestamp).toLocaleString()}</td>
+                    <td>${getWinnerText(game.result)}</td>
+                    <td>${game.depth_player1}/${game.depth_player2}</td>
+                    <td>${game.states.length - 1}</td>
+                    <td><button onclick="loadGame('${game.id}')">Load</button></td>
+                `;
+            });
+        }
+
+        function getWinnerText(result) {
+            switch (result) {
+                case 1: return "Player 1";
+                case 2: return "Player 2";
+                case 3: return "Draw";
+                default: return "Unknown";
+            }
+        }
+
+        async function loadGame(gameId) {
+            try {
+                const response = await fetch(`/load_game/${gameId}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const gameData = await response.json();
+                gameStates = gameData.states;
+                currentStateIndex = 0;
+                initializeBoard(gameStates[currentStateIndex]);
+                updateGameControls();
+                messageElement.textContent = `Loaded game from ${new Date(gameData.timestamp).toLocaleString()}`;
+                opponentSelect.disabled = true;
+                depthInput.disabled = true;
+                modal.style.display = "none";
+            } catch (error) {
+                console.error('Error loading game:', error);
+                alert('Error loading game. Please check the console for details.');
+            }
+        }
+
+        // Modify the existing functions to update gameStates
         async function fetchInitialState() {
             const response = await fetch('/start');
             const data = await response.json();
+            gameStates = [data.board];
+            currentStateIndex = 0;
             initializeBoard(data.board);
             messageElement.textContent = "Your turn!";
+            updateGameControls();
         }
 
         // Handle cell click
@@ -241,6 +460,9 @@
             }
 
             initializeBoard(data.board);
+            gameStates.push(data.board);
+            currentStateIndex = gameStates.length - 1;
+            updateGameControls();
 
             if (data.status === 1) {
                 messageElement.textContent = "You win!";
@@ -260,12 +482,18 @@
         resetButton.addEventListener('click', async () => {
             const response = await fetch('/start');
             const data = await response.json();
+            gameStates = [data.board];
+            currentStateIndex = 0;
             initializeBoard(data.board);
             messageElement.textContent = "Your turn!";
             gameOver = false;
+            updateGameControls();
+            opponentSelect.disabled = false;
+            depthInput.disabled = false;
+            savedGamesList.style.display = 'none';
         });
 
-        // Initialize the game on page load
+        // Initialize the game and load saved games list on page load
         fetchInitialState();
     </script>
 </body>

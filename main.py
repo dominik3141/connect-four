@@ -7,16 +7,16 @@ from minimax import train_against_minimax_supervised
 if __name__ == "__main__":
     # HYPERPARAMETERS
     learning_rate = 0.005
-    batches = 10
+    batches = 3
     eval_interval = 5
     eval_games = 50
     eval_depth = 1
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
     gamma = 0.95
-    depth_teacher = 7
-    depth_opponent = 2
-    batch_size = 1
+    depth_teacher = 1
+    depth_opponent = 1
+    batch_size = 8
     load_model = True
     save_model = False
     use_wandb = False

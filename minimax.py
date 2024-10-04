@@ -5,7 +5,7 @@ from engine import is_in_terminal_state, make_move, is_legal
 from model import DecisionModel, get_next_model_move
 from torch import Tensor
 import torch
-from utils import safe_log_to_wandb
+from utils import safe_log_to_wandb, SavedGame
 
 
 def minimax_move(board: ConnectFour, depth: int = 3) -> int:
@@ -318,8 +318,6 @@ def train_against_minimax_supervised(
                         wins += 1
                     elif status == 3:
                         draws += 1
-
-                    print(board)
                     break
 
             # Calculate loss for this game
@@ -377,12 +375,13 @@ def train_against_minimax_supervised(
 
 def minimax_games(num_games: int, depth_player1: int = 1, depth_player2: int = 1):
     """
-    Have two minimax players play against each other num_games times.
+    Have two minimax players play against each other num_games times and save each game.
     """
-    terminal_states = []
+    saved_games = []
 
     for _ in range(num_games):
         board = ConnectFour()
+        game_states = [board.state.tolist()]
         current_player = 1
 
         while True:
@@ -392,25 +391,38 @@ def minimax_games(num_games: int, depth_player1: int = 1, depth_player2: int = 1
                 move = minimax_move(board, depth=depth_player2)
 
             board = make_move(board, current_player, move)
+            game_states.append(board.state.tolist())
 
             if is_in_terminal_state(board) != 0:
-                terminal_states.append(board)
                 break
 
             current_player = 3 - current_player
 
-    # print some statistics
+        result = is_in_terminal_state(board)
+        saved_game = SavedGame(
+            depth_player1=depth_player1,
+            depth_player2=depth_player2,
+            result=result,
+            states=game_states,
+        )
+        saved_games.append(saved_game)
+
+        # Save the game to a file
+        saved_game.save_to_file("saved_games")
+
+    # Print statistics
     print(f"Number of games: {num_games}")
     print(
-        f"Number of wins for player 1: {sum(1 for board in terminal_states if is_in_terminal_state(board) == 2)}"
+        f"Number of wins for player 1: {sum(1 for game in saved_games if game.result == 1)}"
     )
     print(
-        f"Number of wins for player 2: {sum(1 for board in terminal_states if is_in_terminal_state(board) == 1)}"
+        f"Number of wins for player 2: {sum(1 for game in saved_games if game.result == 2)}"
     )
-    print(
-        f"Number of draws: {sum(1 for board in terminal_states if is_in_terminal_state(board) == 3)}"
-    )
+    print(f"Number of draws: {sum(1 for game in saved_games if game.result == 3)}")
+    print("Games saved to: saved_games/")
+
+    return saved_games
 
 
 if __name__ == "__main__":
-    minimax_games(10, 2, 3)
+    minimax_games(1, depth_player1=5, depth_player2=5)

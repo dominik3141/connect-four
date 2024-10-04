@@ -1,10 +1,8 @@
 from flask import Flask, request, jsonify, send_from_directory
 from engine import ConnectFour, is_legal, make_move, is_in_terminal_state
-from model import (
-    DecisionModel,
-    get_next_model_move,
-)
+from model import DecisionModel, get_next_model_move
 from minimax import minimax_move
+from utils import SavedGame
 import torch
 import os
 import numpy as np
@@ -86,5 +84,30 @@ def player_move():
     return jsonify({"board": game.state.tolist(), "status": status})
 
 
+@app.route("/list_saved_games", methods=["GET"])
+def list_saved_games():
+    saved_games = []
+    for filename in os.listdir("saved_games"):
+        if filename.endswith(".json"):
+            filepath = os.path.join("saved_games", filename)
+            game = SavedGame.load_from_file(filepath)
+            saved_games.append(game.to_dict())
+    return jsonify({"saved_games": saved_games})
+
+
+@app.route("/load_game/<game_id>", methods=["GET"])
+def load_game(game_id):
+    for filename in os.listdir("saved_games"):
+        if filename.endswith(f"{game_id}.json"):
+            filepath = os.path.join("saved_games", filename)
+            game = SavedGame.load_from_file(filepath)
+            return jsonify(game.to_dict())
+    return jsonify({"error": "Game file not found."}), 404
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    os.makedirs("saved_games", exist_ok=True)
+    # app.run(host="0.0.0.0", port=5001, debug=True)
+
+    # only respond to requests from localhost
+    app.run(port=5001, debug=True)
