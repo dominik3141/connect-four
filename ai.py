@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 import wandb
+from utils import safe_log_to_wandb
 
 
 def loss_fn(
@@ -21,7 +22,7 @@ def loss_fn(
         win_reward = 5
 
     if wandb.run is not None:
-        wandb.log({"win_reward": win_reward})
+        safe_log_to_wandb({"win_reward": win_reward})
 
     if outcome == 3:  # Draw
         reward = -0.5
@@ -57,7 +58,7 @@ def loss_fn(
 
     # log the reward to wandb
     if wandb.run is not None:
-        wandb.log({"reward": reward})
+        safe_log_to_wandb({"reward": reward})
 
     print(f"DEBUG: reward: {reward}, discounted_losses: {discounted_losses}")
     print(f"DEBUG: probs: {probs}")

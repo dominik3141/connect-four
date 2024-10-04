@@ -4,7 +4,7 @@ from typing import Callable, Dict
 from model import DecisionModel, get_next_model_move
 from minimax import minimax_move
 from functools import partial
-import wandb
+from utils import safe_log_to_wandb
 
 
 def play_against_opponent(
@@ -92,4 +92,4 @@ def log_evaluation_results(eval_results: Dict[str, Dict[str, int]]) -> None:
     for opponent, results in eval_results.items():
         total_games = sum(results.values())
         win_rate = results["wins"] / total_games if total_games > 0 else 0
-        wandb.log({f"{opponent}_win_rate": win_rate})
+        safe_log_to_wandb({f"{opponent}_win_rate": win_rate})

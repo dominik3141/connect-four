@@ -3,6 +3,7 @@ import wandb
 from model import DecisionModel
 from minimax import train_against_minimax_supervised
 
+
 if __name__ == "__main__":
     # HYPERPARAMETERS
     learning_rate = 0.005

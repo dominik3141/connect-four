@@ -5,7 +5,7 @@ from engine import is_in_terminal_state, make_move, is_legal
 from model import DecisionModel, get_next_model_move
 from torch import Tensor
 import torch
-import wandb
+from utils import safe_log_to_wandb
 
 
 def minimax_move(board: ConnectFour, depth: int = 3) -> int:
@@ -235,7 +235,7 @@ def train_against_minimax(
         )
 
         # Log the average loss, win rate and model confidence to wandb
-        wandb.log(
+        safe_log_to_wandb(
             {
                 "loss": batch_loss.item(),
                 "win_rate": win_rate,
@@ -347,7 +347,7 @@ def train_against_minimax_supervised(
         print(f"Win rate: {win_rate:.2f}, Draw rate: {draw_rate:.2f}")
 
         # Log metrics to wandb
-        wandb.log(
+        safe_log_to_wandb(
             {
                 "supervised_loss": batch_loss.item(),
                 "accuracy": accuracy,
