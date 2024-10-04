@@ -373,3 +373,44 @@ def train_against_minimax_supervised(
             log_evaluation_results(eval_results)
 
     return model
+
+
+def minimax_games(num_games: int, depth_player1: int = 1, depth_player2: int = 1):
+    """
+    Have two minimax players play against each other num_games times.
+    """
+    terminal_states = []
+
+    for _ in range(num_games):
+        board = ConnectFour()
+        current_player = 1
+
+        while True:
+            if current_player == 1:
+                move = minimax_move(board, depth=depth_player1)
+            else:
+                move = minimax_move(board, depth=depth_player2)
+
+            board = make_move(board, current_player, move)
+
+            if is_in_terminal_state(board) != 0:
+                terminal_states.append(board)
+                break
+
+            current_player = 3 - current_player
+
+    # print some statistics
+    print(f"Number of games: {num_games}")
+    print(
+        f"Number of wins for player 1: {sum(1 for board in terminal_states if is_in_terminal_state(board) == 2)}"
+    )
+    print(
+        f"Number of wins for player 2: {sum(1 for board in terminal_states if is_in_terminal_state(board) == 1)}"
+    )
+    print(
+        f"Number of draws: {sum(1 for board in terminal_states if is_in_terminal_state(board) == 3)}"
+    )
+
+
+if __name__ == "__main__":
+    minimax_games(10, 2, 3)
