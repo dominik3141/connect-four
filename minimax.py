@@ -1,15 +1,15 @@
 from engine import ConnectFour
-from typing import Tuple, List
-import copy
+from typing import Tuple, List, Optional
 from engine import is_in_terminal_state, make_move, is_legal
 from model import DecisionModel, get_next_model_move
 from torch import Tensor
 import torch
 from utils import safe_log_to_wandb, SavedGame
 import random
+import numpy as np
 
 
-def minimax_move(board: ConnectFour, player: int, depth: int = 3) -> int:
+def minimax_move(board: ConnectFour, player: int, depth: int = 4) -> int:
     """
     Determine the best legal move for the given player using the minimax algorithm with alpha-beta pruning.
     """
@@ -19,49 +19,107 @@ def minimax_move(board: ConnectFour, player: int, depth: int = 3) -> int:
         Evaluate the current board state. Positive scores favor the current player,
         negative scores favor the opponent.
         """
-        status = is_in_terminal_state(board)
-        if status == player:
-            return 1000
-        elif status == 3 - player:  # opponent
-            return -1000
-        elif status == 3:  # draw
-            return 0
-
+        WINDOW_LENGTH = 4
+        EMPTY = 0
+        opponent = 3 - player
         score = 0
-        for col in range(7):  # Iterate over columns
-            row = next((r for r in range(5, -1, -1) if board.state[r][col] == 0), -1)
-            if row != -1:
-                score += count_potential_wins(
-                    board, row, col, player
-                ) - count_potential_wins(board, row, col, 3 - player)
+
+        # Center column preference
+        center_array = [board.state[r][3] for r in range(6)]
+        center_count = center_array.count(player)
+        score += center_count * 3
+
+        # Score Horizontal
+        for r in range(6):
+            row_array = board.state[r]
+            for c in range(7 - 3):
+                window = row_array[c : c + WINDOW_LENGTH]
+                score += evaluate_window(window, player)
+
+        # Score Vertical
+        for c in range(7):
+            col_array = [board.state[r][c] for r in range(6)]
+            for r in range(6 - 3):
+                window = col_array[r : r + WINDOW_LENGTH]
+                score += evaluate_window(window, player)
+
+        # Score positive sloped diagonals
+        for r in range(6 - 3):
+            for c in range(7 - 3):
+                window = [board.state[r + i][c + i] for i in range(WINDOW_LENGTH)]
+                score += evaluate_window(window, player)
+
+        # Score negative sloped diagonals
+        for r in range(3, 6):
+            for c in range(7 - 3):
+                window = [board.state[r - i][c + i] for i in range(WINDOW_LENGTH)]
+                score += evaluate_window(window, player)
+
         return score
 
-    def count_potential_wins(
-        board: ConnectFour, row: int, col: int, player: int
-    ) -> int:
-        """
-        Count the number of potential winning lines for a player at a given position.
-        """
-        directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
-        count = 0
-        for dy, dx in directions:
-            if can_win_direction(board, row, col, dy, dx, player):
-                count += 1
-        return count
+    def evaluate_window(window: np.ndarray, player: int) -> int:
+        score = 0
+        opp_player = 2 if player == 1 else 1
 
-    def can_win_direction(
-        board: ConnectFour, row: int, col: int, dy: int, dx: int, player: int
-    ) -> bool:
+        # Replace window.count() with np.count_nonzero()
+        if np.count_nonzero(window == player) == 4:
+            score += 100
+        elif (
+            np.count_nonzero(window == player) == 3
+            and np.count_nonzero(window == 0) == 1
+        ):
+            score += 5
+        elif (
+            np.count_nonzero(window == player) == 2
+            and np.count_nonzero(window == 0) == 2
+        ):
+            score += 2
+
+        if (
+            np.count_nonzero(window == opp_player) == 3
+            and np.count_nonzero(window == 0) == 1
+        ):
+            score -= 4
+
+        return score
+
+    def is_terminal_node(board: ConnectFour) -> bool:
         """
-        Check if a player can potentially win in a given direction from a specific position.
+        Check if the current board is a terminal node (win, loss, or draw).
         """
-        for i in range(4):
-            y, x = row + i * dy, col + i * dx
-            if y < 0 or y >= 6 or x < 0 or x >= 7:
-                return False
-            if board.state[y][x] not in (0, player):
-                return False
-        return True
+        return is_in_terminal_state(board) != 0 or len(get_valid_locations(board)) == 0
+
+    def get_valid_locations(board: ConnectFour) -> List[int]:
+        """
+        Get a list of valid columns where a move can be made.
+        """
+        return [col for col in range(7) if is_legal(board, col)]
+
+    def get_next_open_row(board: ConnectFour, col: int) -> Optional[int]:
+        """
+        Get the next open row in the specified column.
+        """
+        for r in range(5, -1, -1):
+            if board.state[r][col] == 0:
+                return r
+        return None
+
+    def make_move(board: ConnectFour, player: int, col: int):
+        """
+        Place the player's piece in the specified column.
+        """
+        row = get_next_open_row(board, col)
+        if row is not None:
+            board.state[row][col] = player
+
+    def undo_move(board: ConnectFour, col: int):
+        """
+        Remove the top piece from the specified column.
+        """
+        for r in range(6):
+            if board.state[r][col] != 0:
+                board.state[r][col] = 0
+                break
 
     def minimax(
         board: ConnectFour,
@@ -69,51 +127,65 @@ def minimax_move(board: ConnectFour, player: int, depth: int = 3) -> int:
         alpha: float,
         beta: float,
         maximizing_player: bool,
-        player: int,
-    ) -> Tuple[int, float]:  # returns best move and evaluation score
+    ) -> Tuple[Optional[int], float]:
         """
-        Implement the minimax algorithm with alpha-beta pruning.
-        Returns the best move and its evaluation score.
+        Minimax algorithm with alpha-beta pruning.
+        Returns the best column and its evaluation score.
         """
-        if depth == 0 or is_in_terminal_state(board) != 0:
-            return -1, evaluate(board, player)
+        valid_locations = get_valid_locations(board)
+        is_terminal = is_terminal_node(board)
 
-        best_move = -1
+        if depth == 0 or is_terminal:
+            if is_terminal:
+                status = is_in_terminal_state(board)
+                if status == player:
+                    return (None, float("inf"))
+                elif status == 3 - player:
+                    return (None, float("-inf"))
+                else:
+                    return (None, 0)
+            else:
+                return (None, evaluate(board, player))
+
         if maximizing_player:
-            max_eval = float("-inf")
-            for move in range(7):
-                if is_legal(board, move):
-                    new_board = copy.deepcopy(board)
-                    make_move(new_board, player, move)
-                    _, eval = minimax(new_board, depth - 1, alpha, beta, False, player)
-                    if eval > max_eval or best_move == -1:
-                        max_eval = eval
-                        best_move = move
-                    alpha = max(alpha, eval)
-                    if beta <= alpha:
-                        break
-            return best_move, max_eval
+            value = float("-inf")
+            best_col = random.choice(valid_locations)
+            for col in valid_locations:
+                make_move(board, player, col)
+                new_score = minimax(board, depth - 1, alpha, beta, False)[1]
+                undo_move(board, col)
+                if new_score > value:
+                    value = new_score
+                    best_col = col
+                alpha = max(alpha, value)
+                if alpha >= beta:
+                    break
+            return best_col, value
         else:
-            min_eval = float("inf")
-            for move in range(7):
-                if is_legal(board, move):
-                    new_board = copy.deepcopy(board)
-                    make_move(new_board, 3 - player, move)
-                    _, eval = minimax(new_board, depth - 1, alpha, beta, True, player)
-                    if eval < min_eval or best_move == -1:
-                        min_eval = eval
-                        best_move = move
-                    beta = min(beta, eval)
-                    if beta <= alpha:
-                        break
-            return best_move, min_eval
+            value = float("inf")
+            best_col = random.choice(valid_locations)
+            opponent = 3 - player
+            for col in valid_locations:
+                make_move(board, opponent, col)
+                new_score = minimax(board, depth - 1, alpha, beta, True)[1]
+                undo_move(board, col)
+                if new_score < value:
+                    value = new_score
+                    best_col = col
+                beta = min(beta, value)
+                if alpha >= beta:
+                    break
+            return best_col, value
 
-    best_move, _ = minimax(board, depth, float("-inf"), float("inf"), True, player)
+    best_move, _ = minimax(board, depth, float("-inf"), float("inf"), True)
 
     # Ensure the best move is legal
-    if not is_legal(board, best_move):
-        # If the best move is not legal, then the algorithm has failed
-        raise ValueError("Algorithm wants to make an illegal move")
+    if best_move is None or not is_legal(board, best_move):
+        valid_locations = get_valid_locations(board)
+        if valid_locations:
+            best_move = random.choice(valid_locations)
+        else:
+            raise ValueError("No valid moves available")
 
     return best_move
 
@@ -443,4 +515,4 @@ def minimax_games(
 
 
 if __name__ == "__main__":
-    minimax_games(100, depth_player1=3, depth_player2=4, save_prob=0.0)
+    minimax_games(100, depth_player1=1, depth_player2=1, save_prob=0.0)
