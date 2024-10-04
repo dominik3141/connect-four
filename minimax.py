@@ -6,24 +6,25 @@ from model import DecisionModel, get_next_model_move
 from torch import Tensor
 import torch
 from utils import safe_log_to_wandb, SavedGame
+import random
 
 
-def minimax_move(board: ConnectFour, depth: int = 3) -> int:
+def minimax_move(board: ConnectFour, player: int, depth: int = 3) -> int:
     """
-    Determine the best legal move for the AI player using the minimax algorithm with alpha-beta pruning.
+    Determine the best legal move for the given player using the minimax algorithm with alpha-beta pruning.
     """
 
-    def evaluate(board: ConnectFour) -> float:
+    def evaluate(board: ConnectFour, player: int) -> float:
         """
-        Evaluate the current board state. Positive scores favor the AI player,
-        negative scores favor the human player.
+        Evaluate the current board state. Positive scores favor the current player,
+        negative scores favor the opponent.
         """
         status = is_in_terminal_state(board)
-        if status == 1:
-            return -1000
-        elif status == 2:
+        if status == player:
             return 1000
-        elif status == 3:
+        elif status == 3 - player:  # opponent
+            return -1000
+        elif status == 3:  # draw
             return 0
 
         score = 0
@@ -31,8 +32,8 @@ def minimax_move(board: ConnectFour, depth: int = 3) -> int:
             row = next((r for r in range(5, -1, -1) if board.state[r][col] == 0), -1)
             if row != -1:
                 score += count_potential_wins(
-                    board, row, col, 2
-                ) - count_potential_wins(board, row, col, 1)
+                    board, row, col, player
+                ) - count_potential_wins(board, row, col, 3 - player)
         return score
 
     def count_potential_wins(
@@ -68,13 +69,14 @@ def minimax_move(board: ConnectFour, depth: int = 3) -> int:
         alpha: float,
         beta: float,
         maximizing_player: bool,
+        player: int,
     ) -> Tuple[int, float]:  # returns best move and evaluation score
         """
         Implement the minimax algorithm with alpha-beta pruning.
         Returns the best move and its evaluation score.
         """
         if depth == 0 or is_in_terminal_state(board) != 0:
-            return -1, evaluate(board)
+            return -1, evaluate(board, player)
 
         best_move = -1
         if maximizing_player:
@@ -82,8 +84,8 @@ def minimax_move(board: ConnectFour, depth: int = 3) -> int:
             for move in range(7):
                 if is_legal(board, move):
                     new_board = copy.deepcopy(board)
-                    make_move(new_board, 2, move)
-                    _, eval = minimax(new_board, depth - 1, alpha, beta, False)
+                    make_move(new_board, player, move)
+                    _, eval = minimax(new_board, depth - 1, alpha, beta, False, player)
                     if eval > max_eval or best_move == -1:
                         max_eval = eval
                         best_move = move
@@ -96,8 +98,8 @@ def minimax_move(board: ConnectFour, depth: int = 3) -> int:
             for move in range(7):
                 if is_legal(board, move):
                     new_board = copy.deepcopy(board)
-                    make_move(new_board, 1, move)
-                    _, eval = minimax(new_board, depth - 1, alpha, beta, True)
+                    make_move(new_board, 3 - player, move)
+                    _, eval = minimax(new_board, depth - 1, alpha, beta, True, player)
                     if eval < min_eval or best_move == -1:
                         min_eval = eval
                         best_move = move
@@ -106,18 +108,12 @@ def minimax_move(board: ConnectFour, depth: int = 3) -> int:
                         break
             return best_move, min_eval
 
-    best_move, _ = minimax(board, depth, float("-inf"), float("inf"), True)
+    best_move, _ = minimax(board, depth, float("-inf"), float("inf"), True, player)
 
     # Ensure the best move is legal
     if not is_legal(board, best_move):
-        # If the best move is not legal, choose the first legal move
-        for move in range(7):
-            if is_legal(board, move):
-                return move
-
-    # final check if still not legal
-    if not is_legal(board, best_move):
-        raise ValueError("No legal moves available")
+        # If the best move is not legal, then the algorithm has failed
+        raise ValueError("Algorithm wants to make an illegal move")
 
     return best_move
 
@@ -135,7 +131,7 @@ def play_against_minimax(
 
     while True:
         if current_player == 1:
-            move = minimax_move(board, depth=depth)
+            move = minimax_move(board, player=1, depth=depth)
         elif current_player == 2:
             move, prob = get_next_model_move(
                 model, board, temperature=temperature, epsilon=epsilon
@@ -267,14 +263,17 @@ def train_against_minimax_supervised(
     depth_teacher: int = 3,
     depth_opponent: int = 1,
     batch_size: int = 128,
+    save_prob: float = 0.0,
 ) -> DecisionModel:
     """
     Train the model using two minimax players. One minimax opponent and one minimax teacher.
     The model is trained to predict the teacher's moves.
     Stops early if accuracy is above 95% for 5 or more consecutive batches.
+    Saves games with probability save_prob.
     """
     from torch.nn import functional as F
     from evaluations import evaluate_model, log_evaluation_results
+    import random
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -292,13 +291,14 @@ def train_against_minimax_supervised(
         for _ in range(batch_size):
             board = ConnectFour()
             game_moves = []  # list of tuples (model_output, teacher_move)
+            game_states = [board.state.tolist()]  # For saving games
 
             current_player = 1
             while True:
                 if current_player == 1:  # Minimax opponent's turn
-                    move = minimax_move(board, depth=depth_opponent)
+                    move = minimax_move(board, player=1, depth=depth_opponent)
                 else:  # Model's turn (trying to predict teacher's move)
-                    teacher_move = minimax_move(board, depth=depth_teacher)
+                    teacher_move = minimax_move(board, player=2, depth=depth_teacher)
                     model_output = model(torch.Tensor(board.state))
                     move, _ = get_next_model_move(model, board, temperature, epsilon)
 
@@ -309,6 +309,7 @@ def train_against_minimax_supervised(
                     total_moves += 1
 
                 board = make_move(board, current_player, move)
+                game_states.append(board.state.tolist())  # For saving games
 
                 current_player = 3 - current_player
 
@@ -326,6 +327,16 @@ def train_against_minimax_supervised(
                     model_output.unsqueeze(0), torch.tensor([teacher_move])
                 )
                 batch_loss = batch_loss + loss
+
+            # Save the game with probability save_prob
+            if random.random() < save_prob:
+                saved_game = SavedGame(
+                    depth_player1=depth_opponent,
+                    depth_player2=depth_teacher,
+                    result=status,
+                    states=game_states,
+                )
+                saved_game.save_to_file("saved_games")
 
         # Normalize the loss
         batch_loss = batch_loss / batch_size
@@ -373,9 +384,14 @@ def train_against_minimax_supervised(
     return model
 
 
-def minimax_games(num_games: int, depth_player1: int = 1, depth_player2: int = 1):
+def minimax_games(
+    num_games: int,
+    depth_player1: int = 1,
+    depth_player2: int = 1,
+    save_prob: float = 0.0,
+):
     """
-    Have two minimax players play against each other num_games times and save each game.
+    Have two minimax players play against each other num_games times and save each game with a probability of save_prob.
     """
     saved_games = []
 
@@ -386,9 +402,9 @@ def minimax_games(num_games: int, depth_player1: int = 1, depth_player2: int = 1
 
         while True:
             if current_player == 1:
-                move = minimax_move(board, depth=depth_player1)
+                move = minimax_move(board, player=1, depth=depth_player1)
             else:
-                move = minimax_move(board, depth=depth_player2)
+                move = minimax_move(board, player=2, depth=depth_player2)
 
             board = make_move(board, current_player, move)
             game_states.append(board.state.tolist())
@@ -407,8 +423,9 @@ def minimax_games(num_games: int, depth_player1: int = 1, depth_player2: int = 1
         )
         saved_games.append(saved_game)
 
-        # Save the game to a file
-        saved_game.save_to_file("saved_games")
+        # Save the game to a file with probability save_prob
+        if random.random() < save_prob:
+            saved_game.save_to_file("saved_games")
 
     # Print statistics
     print(f"Number of games: {num_games}")
@@ -419,10 +436,11 @@ def minimax_games(num_games: int, depth_player1: int = 1, depth_player2: int = 1
         f"Number of wins for player 2: {sum(1 for game in saved_games if game.result == 2)}"
     )
     print(f"Number of draws: {sum(1 for game in saved_games if game.result == 3)}")
+    print(f"Approximate number of games saved: {int(num_games * save_prob)}")
     print("Games saved to: saved_games/")
 
     return saved_games
 
 
 if __name__ == "__main__":
-    minimax_games(1, depth_player1=5, depth_player2=5)
+    minimax_games(100, depth_player1=3, depth_player2=4, save_prob=0.0)

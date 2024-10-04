@@ -7,19 +7,20 @@ from minimax import train_against_minimax_supervised
 if __name__ == "__main__":
     # HYPERPARAMETERS
     learning_rate = 0.005
-    batches = 3
-    eval_interval = 5
+    batches = 10
+    eval_interval = 2
     eval_games = 50
-    eval_depth = 1
+    eval_depth = 2
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
     gamma = 0.95
-    depth_teacher = 1
-    depth_opponent = 1
+    depth_teacher = 3
+    depth_opponent = 2
     batch_size = 8
     load_model = True
     save_model = False
     use_wandb = False
+    save_prob = 0.0  # probability of saving a game
 
     # initialize the model
     model = DecisionModel()
@@ -55,6 +56,7 @@ if __name__ == "__main__":
                 "batch_size": batch_size,
                 "load_model": load_model,
                 "num_params": num_params,
+                "save_prob": save_prob,
             }
         )
 
@@ -70,6 +72,7 @@ if __name__ == "__main__":
         depth_teacher=depth_teacher,
         depth_opponent=depth_opponent,
         batch_size=batch_size,
+        save_prob=save_prob,
     )
 
     if save_model:

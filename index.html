@@ -216,7 +216,7 @@
         </select>
         <div id="depth-container" style="display: none;">
             <label for="depth-input">Minimax Depth:</label>
-            <input type="number" id="depth-input" min="1" max="5" value="1">
+            <input type="number" id="depth-input" min="1" max="10" value="1">
         </div>
     </div>
     <div id="board"></div>
@@ -373,7 +373,7 @@
 
         closeBtn.onclick = () => {
             modal.style.display = "none";
-        };
+        }
 
         window.onclick = (event) => {
             if (event.target == modal) {

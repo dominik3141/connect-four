@@ -47,7 +47,9 @@ def evaluate_model(
     """
     opponents = {
         "random": engine.random_move,
-        "minimax": partial(minimax_move, depth=depth_for_minimax),
+        "minimax": partial(
+            minimax_move, player=1, depth=depth_for_minimax
+        ),  # always plays as player 1
     }
 
     results = {opponent: {"wins": 0, "losses": 0, "draws": 0} for opponent in opponents}
