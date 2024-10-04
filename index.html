@@ -278,6 +278,8 @@
         const closeBtn = document.getElementsByClassName('close')[0];
         const savedGamesTable = document.getElementById('savedGamesTable').getElementsByTagName('tbody')[0];
 
+        let isWatchingSavedGame = false;
+
         opponentSelect.addEventListener('change', function () {
             depthContainer.style.display = this.value === 'minimax' ? 'block' : 'none';
         });
@@ -331,6 +333,9 @@
             prevMoveButton.disabled = currentStateIndex === 0;
             nextMoveButton.disabled = currentStateIndex === gameStates.length - 1;
             moveCounter.textContent = `Move: ${currentStateIndex} / ${gameStates.length - 1}`;
+
+            // Disable board interaction when watching a saved game
+            boardElement.style.pointerEvents = isWatchingSavedGame ? 'none' : 'auto';
         }
 
         prevMoveButton.addEventListener('click', () => {
@@ -410,8 +415,9 @@
                 gameStates = gameData.states;
                 currentStateIndex = 0;
                 initializeBoard(gameStates[currentStateIndex]);
+                isWatchingSavedGame = true;
                 updateGameControls();
-                messageElement.textContent = `Loaded game from ${new Date(gameData.timestamp).toLocaleString()}`;
+                messageElement.textContent = `Loaded game from ${new Date(gameData.timestamp).toLocaleString()}.`;
                 opponentSelect.disabled = true;
                 depthInput.disabled = true;
                 modal.style.display = "none";
@@ -478,7 +484,7 @@
             }
         });
 
-        // Handle reset button
+        // Modify the reset button event listener
         resetButton.addEventListener('click', async () => {
             const response = await fetch('/start');
             const data = await response.json();
@@ -487,6 +493,7 @@
             initializeBoard(data.board);
             messageElement.textContent = "Your turn!";
             gameOver = false;
+            isWatchingSavedGame = false;
             updateGameControls();
             opponentSelect.disabled = false;
             depthInput.disabled = false;
