@@ -9,10 +9,14 @@ from torch import Tensor
 
 
 class DecisionModel(nn.Module):
+    """
+    A model that takes a board state and the player and returns a move.
+    """
+
     def __init__(self):
         super(DecisionModel, self).__init__()
         self.lin = nn.Sequential(
-            nn.Linear(7 * 6 * 2, 256),
+            nn.Linear(7 * 6 * 2 + 1, 256),
             nn.ReLU(),
             nn.Linear(256, 256),
             nn.ReLU(),
@@ -27,7 +31,27 @@ class DecisionModel(nn.Module):
         player1_board = (x == 1).float().view(-1)
         player2_board = (x == 2).float().view(-1)
         x = torch.cat([player1_board, player2_board], dim=0)  # Shape: (7 * 6 * 2)
+
+        assert x.shape == (7 * 6 * 2), f"Expected shape (7 * 6 * 2), got {x.shape}"
+
+        # find out who is next to move
+        next_player = who_is_next(x)
+
+        # tell the model who is next to move
+        x = torch.cat([x, torch.Tensor([next_player])], dim=0)
+
+        assert x.shape == (
+            7 * 6 * 2 + 1
+        ), f"Expected shape (7 * 6 * 2 + 1), got {x.shape}"
+
         return self.lin(x)
+
+
+def who_is_next(board: ConnectFour) -> int:
+    """
+    Return the player who is next to move.
+    """
+    return 1 if board.state.sum() % 2 == 0 else 2
 
 
 def get_next_model_move(
