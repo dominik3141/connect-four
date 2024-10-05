@@ -440,7 +440,7 @@
 
         // Handle cell click
         boardElement.addEventListener('click', async (event) => {
-            if (gameOver) return;
+            if (gameOver || isWatchingSavedGame) return;
             const target = event.target;
             if (!target.classList.contains('cell')) return;
             const column = parseInt(target.dataset.column);
@@ -482,6 +482,10 @@
             } else {
                 messageElement.textContent = "Your turn!";
             }
+
+            if (gameOver) {
+                boardElement.style.pointerEvents = 'none';
+            }
         });
 
         // Modify the reset button event listener
@@ -498,6 +502,7 @@
             opponentSelect.disabled = false;
             depthInput.disabled = false;
             savedGamesList.style.display = 'none';
+            boardElement.style.pointerEvents = 'auto';
         });
 
         // Initialize the game and load saved games list on page load

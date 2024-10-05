@@ -5,6 +5,7 @@ from model import DecisionModel, get_next_model_move
 from minimax import minimax_move
 from functools import partial
 from utils import safe_log_to_wandb
+import random
 
 
 def play_against_opponent(
@@ -39,41 +40,48 @@ def play_against_opponent(
 def evaluate_model(
     model: DecisionModel, num_games: int = 100, depth_for_minimax: int = 2
 ) -> Dict[str, Dict[str, int]]:
-    """
-    Conducts a comprehensive evaluation of the given model against multiple opponents.
-    The model plays a specified number of games against each opponent, alternating between
-    playing as player 1 and player 2. The function returns a dictionary containing the
-    results (wins, losses, draws) for each opponent.
-    """
     opponents = {
-        "random": engine.random_move,
-        "minimax": partial(
-            minimax_move, player=1, depth=depth_for_minimax
-        ),  # always plays as player 1
+        "random": lambda board, player: engine.random_move(board),
     }
 
     results = {opponent: {"wins": 0, "losses": 0, "draws": 0} for opponent in opponents}
+    results["minimax"] = {"wins": 0, "losses": 0, "draws": 0}
 
-    # play num_games against each opponent
-    for opponent_name, opponent_fn in opponents.items():
-        for game_num in range(num_games):
-            # Model plays as player 2
-            outcome = play_against_opponent(model, opponent_fn, model_player=2)
-            if outcome == 2:
+    for _ in range(num_games):
+        # Randomly decide who starts
+        model_player = random.choice([1, 2])
+        opponent_player = 3 - model_player
+
+        # Create minimax opponent dynamically
+        minimax_opponent = partial(
+            minimax_move, player=opponent_player, depth=depth_for_minimax
+        )
+
+        for opponent_name, opponent_fn in opponents.items():
+            outcome = play_against_opponent(
+                model,
+                lambda board: opponent_fn(board, opponent_player),
+                model_player=model_player,
+            )
+
+            if outcome == model_player:
                 results[opponent_name]["wins"] += 1
-            elif outcome == 1:
+            elif outcome == opponent_player:
                 results[opponent_name]["losses"] += 1
             else:
                 results[opponent_name]["draws"] += 1
 
-            # Model plays as player 1
-            outcome = play_against_opponent(model, opponent_fn, model_player=1)
-            if outcome == 1:
-                results[opponent_name]["wins"] += 1
-            elif outcome == 2:
-                results[opponent_name]["losses"] += 1
-            else:
-                results[opponent_name]["draws"] += 1
+        # Evaluate against minimax separately
+        outcome = play_against_opponent(
+            model, lambda board: minimax_opponent(board), model_player=model_player
+        )
+
+        if outcome == model_player:
+            results["minimax"]["wins"] += 1
+        elif outcome == opponent_player:
+            results["minimax"]["losses"] += 1
+        else:
+            results["minimax"]["draws"] += 1
 
     return results
 

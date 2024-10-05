@@ -70,6 +70,11 @@ def random_move(board: ConnectFour) -> Move:
 
 
 def is_in_terminal_state(board: ConnectFour) -> int:
+    """
+    Returns the winning player's number if the game is in a terminal state,
+    or 3 if the game is a stalemate,
+    or 0 if the game is not in a terminal state.
+    """
     for player in [1, 2]:
         # Check horizontal
         for row in range(6):

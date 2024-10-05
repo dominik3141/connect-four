@@ -9,7 +9,7 @@ import random
 import numpy as np
 
 
-def minimax_move(board: ConnectFour, player: int, depth: int = 4) -> int:
+def minimax_move(board: ConnectFour, player: int, depth: int = 1) -> int:
     """
     Determine the best legal move for the given player using the minimax algorithm with alpha-beta pruning.
     """
@@ -20,8 +20,6 @@ def minimax_move(board: ConnectFour, player: int, depth: int = 4) -> int:
         negative scores favor the opponent.
         """
         WINDOW_LENGTH = 4
-        EMPTY = 0
-        opponent = 3 - player
         score = 0
 
         # Center column preference
@@ -58,24 +56,30 @@ def minimax_move(board: ConnectFour, player: int, depth: int = 4) -> int:
         return score
 
     def evaluate_window(window: np.ndarray, player: int) -> int:
+        """
+        Evaluate the score of a window (4 consecutive cells) for the given player.
+        """
         score = 0
-        opp_player = 2 if player == 1 else 1
+        opp_player = 3 - player
 
-        # Replace window.count() with np.count_nonzero()
         if np.count_nonzero(window == player) == 4:
+            # 4 in a row is a win
             score += 100
         elif (
+            # 3 in a row is a good position
             np.count_nonzero(window == player) == 3
             and np.count_nonzero(window == 0) == 1
         ):
             score += 5
         elif (
+            # 2 in a row
             np.count_nonzero(window == player) == 2
             and np.count_nonzero(window == 0) == 2
         ):
             score += 2
 
         if (
+            # 3 in a row for opponent
             np.count_nonzero(window == opp_player) == 3
             and np.count_nonzero(window == 0) == 1
         ):
@@ -126,7 +130,8 @@ def minimax_move(board: ConnectFour, player: int, depth: int = 4) -> int:
         depth: int,
         alpha: float,
         beta: float,
-        maximizing_player: bool,
+        current_player: int,
+        original_player: int,
     ) -> Tuple[Optional[int], float]:
         """
         Minimax algorithm with alpha-beta pruning.
@@ -138,21 +143,24 @@ def minimax_move(board: ConnectFour, player: int, depth: int = 4) -> int:
         if depth == 0 or is_terminal:
             if is_terminal:
                 status = is_in_terminal_state(board)
-                if status == player:
+                if status == original_player:
                     return (None, float("inf"))
-                elif status == 3 - player:
+                elif status == 3 - original_player:
                     return (None, float("-inf"))
-                else:
+                else:  # Game is a draw
                     return (None, 0)
             else:
-                return (None, evaluate(board, player))
+                return (None, evaluate(board, original_player))
 
-        if maximizing_player:
+        if current_player == original_player:
+            # Maximizing player
             value = float("-inf")
             best_col = random.choice(valid_locations)
             for col in valid_locations:
-                make_move(board, player, col)
-                new_score = minimax(board, depth - 1, alpha, beta, False)[1]
+                make_move(board, current_player, col)
+                new_score = minimax(
+                    board, depth - 1, alpha, beta, 3 - current_player, original_player
+                )[1]
                 undo_move(board, col)
                 if new_score > value:
                     value = new_score
@@ -162,12 +170,14 @@ def minimax_move(board: ConnectFour, player: int, depth: int = 4) -> int:
                     break
             return best_col, value
         else:
+            # Minimizing player
             value = float("inf")
             best_col = random.choice(valid_locations)
-            opponent = 3 - player
             for col in valid_locations:
-                make_move(board, opponent, col)
-                new_score = minimax(board, depth - 1, alpha, beta, True)[1]
+                make_move(board, current_player, col)
+                new_score = minimax(
+                    board, depth - 1, alpha, beta, 3 - current_player, original_player
+                )[1]
                 undo_move(board, col)
                 if new_score < value:
                     value = new_score
@@ -177,7 +187,7 @@ def minimax_move(board: ConnectFour, player: int, depth: int = 4) -> int:
                     break
             return best_col, value
 
-    best_move, _ = minimax(board, depth, float("-inf"), float("inf"), True)
+    best_move, _ = minimax(board, depth, float("-inf"), float("inf"), player, player)
 
     # Ensure the best move is legal
     if best_move is None or not is_legal(board, best_move):
@@ -332,7 +342,7 @@ def train_against_minimax_supervised(
     temperature: float = 1.0,
     epsilon: float = 0,
     gamma: float = 0.9,
-    depth_teacher: int = 3,
+    depth_teacher: int = 1,
     depth_opponent: int = 1,
     batch_size: int = 128,
     save_prob: float = 0.0,
@@ -340,6 +350,7 @@ def train_against_minimax_supervised(
     """
     Train the model using two minimax players. One minimax opponent and one minimax teacher.
     The model is trained to predict the teacher's moves.
+    Randomly decides who starts each game within a batch.
     Stops early if accuracy is above 95% for 5 or more consecutive batches.
     Saves games with probability save_prob.
     """
@@ -349,6 +360,7 @@ def train_against_minimax_supervised(
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+    # variables for early stopping
     high_accuracy_count = 0
     accuracy_threshold = 0.95
 
@@ -365,33 +377,48 @@ def train_against_minimax_supervised(
             game_moves = []  # list of tuples (model_output, teacher_move)
             game_states = [board.state.tolist()]  # For saving games
 
+            # Randomly decide who starts
+            model_player = random.choice([1, 2])
+
             current_player = 1
+
             while True:
-                if current_player == 1:  # Minimax opponent's turn
-                    move = minimax_move(board, player=1, depth=depth_opponent)
-                else:  # Model's turn (trying to predict teacher's move)
-                    teacher_move = minimax_move(board, player=2, depth=depth_teacher)
+                if (
+                    current_player == model_player
+                ):  # Model's turn (trying to predict teacher's move)
+                    teacher_move = minimax_move(
+                        board, player=current_player, depth=depth_teacher
+                    )
                     model_output = model(torch.Tensor(board.state))
-                    move, _ = get_next_model_move(model, board, temperature, epsilon)
+                    model_move, _ = get_next_model_move(
+                        model, board, temperature, epsilon
+                    )
 
                     game_moves.append((model_output, teacher_move))
 
-                    if move == teacher_move:
+                    if model_move == teacher_move:
                         correct_predictions += 1
                     total_moves += 1
+
+                    # we execute the move that the teacher chose
+                    move = teacher_move
+                else:  # Minimax opponent's turn
+                    move = minimax_move(
+                        board, player=current_player, depth=depth_opponent
+                    )
 
                 board = make_move(board, current_player, move)
                 game_states.append(board.state.tolist())  # For saving games
 
-                current_player = 3 - current_player
-
                 if is_in_terminal_state(board) != 0:
                     status = is_in_terminal_state(board)
-                    if status == 2:
+                    if status == model_player:
                         wins += 1
                     elif status == 3:
                         draws += 1
                     break
+
+                current_player = 3 - current_player
 
             # Calculate loss for this game
             for model_output, teacher_move in game_moves:
@@ -403,8 +430,12 @@ def train_against_minimax_supervised(
             # Save the game with probability save_prob
             if random.random() < save_prob:
                 saved_game = SavedGame(
-                    depth_player1=depth_opponent,
-                    depth_player2=depth_teacher,
+                    depth_player1=depth_opponent
+                    if model_player == 2
+                    else depth_teacher,
+                    depth_player2=depth_teacher
+                    if model_player == 2
+                    else depth_opponent,
                     result=status,
                     states=game_states,
                 )
@@ -515,4 +546,4 @@ def minimax_games(
 
 
 if __name__ == "__main__":
-    minimax_games(100, depth_player1=1, depth_player2=1, save_prob=0.0)
+    minimax_games(100, depth_player1=1, depth_player2=5, save_prob=0.0)
