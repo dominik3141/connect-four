@@ -7,8 +7,15 @@ import torch
 import os
 import numpy as np
 from typing import List
+from datetime import datetime
+import traceback
+import logging
 
 app = Flask(__name__)
+
+# Initialize the logger
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Initialize the model
 model = DecisionModel()
@@ -19,9 +26,8 @@ if os.path.exists(model_path):
     model.load_state_dict(torch.load(model_path))
     model.eval()
 else:
-    # If no trained model, you might want to train it or handle accordingly
-    print("No trained model found, training model...")
-    pass
+    # fail if no trained model is found
+    raise Exception("No trained model found, training model...")
 
 
 def deserialize_board(board_state: List[List[int]]) -> ConnectFour:
@@ -51,7 +57,7 @@ def player_move():
         not board_state
         or move is None
         or not isinstance(move, int)
-        or not (0 <= move <= 6)
+        or not (0 <= move <= 100)
     ):
         return jsonify({"error": "Invalid input."}), 400
 
@@ -73,7 +79,7 @@ def player_move():
     if status == 0:
         try:
             if opponent == "minimax":
-                ai_move = minimax_move(game, depth)
+                ai_move = minimax_move(game, player=2, depth=depth)
             else:
                 ai_move, _ = get_next_model_move(model, game)
             game = make_move(game, 2, ai_move)  # AI is player 2
@@ -86,13 +92,33 @@ def player_move():
 
 @app.route("/list_saved_games", methods=["GET"])
 def list_saved_games():
-    saved_games = []
-    for filename in os.listdir("saved_games"):
-        if filename.endswith(".json"):
-            filepath = os.path.join("saved_games", filename)
-            game = SavedGame.load_from_file(filepath)
-            saved_games.append(game.to_dict())
-    return jsonify({"saved_games": saved_games})
+    try:
+        saved_games = []
+        for filename in os.listdir("saved_games"):
+            if filename.endswith(".json"):
+                filepath = os.path.join("saved_games", filename)
+                try:
+                    game = SavedGame.load_from_file(filepath)
+                    saved_games.append(game)
+                except Exception as e:
+                    logger.error(f"Error loading game from {filepath}: {str(e)}")
+
+        # Sort the games by timestamp, most recent first
+        saved_games.sort(
+            key=lambda x: datetime.fromisoformat(x.timestamp), reverse=True
+        )
+
+        # Take only the 100 most recent games
+        recent_games = saved_games[:100]
+
+        # Convert the games to dictionaries for JSON serialization
+        recent_games_dict = [game.to_dict() for game in recent_games]
+
+        return jsonify({"saved_games": recent_games_dict})
+    except Exception as e:
+        logger.error(f"Error in list_saved_games: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({"error": "An internal server error occurred"}), 500
 
 
 @app.route("/load_game/<game_id>", methods=["GET"])

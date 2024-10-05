@@ -203,6 +203,76 @@
         tr:hover {
             background-color: #f5f5f5;
         }
+
+        .table-container {
+            max-height: 400px;
+            overflow: hidden;
+        }
+
+        .table-body-container {
+            max-height: 350px;
+            overflow-y: auto;
+        }
+
+        #savedGamesTable,
+        .table-body-container table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        #savedGamesTable thead {
+            background-color: #f2f2f2;
+        }
+
+        #savedGamesTable th,
+        .table-body-container td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+
+        .table-body-container tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+
+        .table-body-container tr:hover {
+            background-color: #f5f5f5;
+        }
+
+        .table-container table {
+            table-layout: fixed;
+            width: 100%;
+        }
+
+        .date-col {
+            width: 30%;
+        }
+
+        .winner-col {
+            width: 20%;
+        }
+
+        .depth-col {
+            width: 15%;
+        }
+
+        .moves-col {
+            width: 15%;
+        }
+
+        .action-col {
+            width: 20%;
+        }
+
+        #savedGamesTable th,
+        .table-body-container td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
     </style>
 </head>
 
@@ -233,20 +303,26 @@
         <div class="modal-content">
             <span class="close">&times;</span>
             <h2>Saved Games</h2>
-            <table id="savedGamesTable">
-                <thead>
-                    <tr>
-                        <th>Date Played</th>
-                        <th>Winner</th>
-                        <th>Depth (P1/P2)</th>
-                        <th>Moves</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <!-- Saved games will be inserted here -->
-                </tbody>
-            </table>
+            <div class="table-container">
+                <table id="savedGamesTable">
+                    <thead>
+                        <tr>
+                            <th class="date-col">Date Played</th>
+                            <th class="winner-col">Winner</th>
+                            <th class="depth-col">Depth (P1/P2)</th>
+                            <th class="moves-col">Moves</th>
+                            <th class="action-col">Action</th>
+                        </tr>
+                    </thead>
+                </table>
+                <div class="table-body-container">
+                    <table>
+                        <tbody id="savedGamesTableBody">
+                            <!-- Saved games will be inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -276,7 +352,7 @@
 
         const modal = document.getElementById('savedGamesModal');
         const closeBtn = document.getElementsByClassName('close')[0];
-        const savedGamesTable = document.getElementById('savedGamesTable').getElementsByTagName('tbody')[0];
+        const savedGamesTableBody = document.getElementById('savedGamesTableBody');
 
         let isWatchingSavedGame = false;
 
@@ -382,16 +458,16 @@
         };
 
         function displaySavedGames(games) {
-            savedGamesTable.innerHTML = '';
+            savedGamesTableBody.innerHTML = '';
             games.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
             games.forEach(game => {
-                const row = savedGamesTable.insertRow();
+                const row = savedGamesTableBody.insertRow();
                 row.innerHTML = `
-                    <td>${new Date(game.timestamp).toLocaleString()}</td>
-                    <td>${getWinnerText(game.result)}</td>
-                    <td>${game.depth_player1}/${game.depth_player2}</td>
-                    <td>${game.states.length - 1}</td>
-                    <td><button onclick="loadGame('${game.id}')">Load</button></td>
+                    <td class="date-col">${new Date(game.timestamp).toLocaleString()}</td>
+                    <td class="winner-col">${getWinnerText(game.result)}</td>
+                    <td class="depth-col">${game.depth_player1}/${game.depth_player2}</td>
+                    <td class="moves-col">${game.states.length - 1}</td>
+                    <td class="action-col"><button onclick="loadGame('${game.id}')">Load</button></td>
                 `;
             });
         }
@@ -507,6 +583,21 @@
 
         // Initialize the game and load saved games list on page load
         fetchInitialState();
+
+        const tableBodyContainer = document.querySelector('.table-body-container');
+
+        tableBodyContainer.addEventListener('wheel', function (e) {
+            const containerHeight = this.clientHeight;
+            const contentHeight = this.scrollHeight;
+            const scrollTop = this.scrollTop;
+            const delta = e.deltaY;
+
+            // Prevent scrolling when at the top or bottom of the container
+            if ((delta > 0 && contentHeight - containerHeight - scrollTop <= 1) ||
+                (delta < 0 && scrollTop <= 0)) {
+                e.preventDefault();
+            }
+        });
     </script>
 </body>
 
