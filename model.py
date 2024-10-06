@@ -32,7 +32,9 @@ class DecisionModel(nn.Module):
         player2_board = (x == 2).float().view(-1)
         x = torch.cat([player1_board, player2_board], dim=0)  # Shape: (7 * 6 * 2)
 
-        assert x.shape == (7 * 6 * 2), f"Expected shape (7 * 6 * 2), got {x.shape}"
+        assert x.shape == torch.Size(
+            [7 * 6 * 2]
+        ), f"Expected shape torch.Size([7 * 6 * 2]), got {x.shape}"
 
         # find out who is next to move
         next_player = who_is_next(x)
@@ -40,18 +42,18 @@ class DecisionModel(nn.Module):
         # tell the model who is next to move
         x = torch.cat([x, torch.Tensor([next_player])], dim=0)
 
-        assert x.shape == (
-            7 * 6 * 2 + 1
-        ), f"Expected shape (7 * 6 * 2 + 1), got {x.shape}"
+        assert x.shape == torch.Size(
+            [7 * 6 * 2 + 1]
+        ), f"Expected shape torch.Size([7 * 6 * 2 + 1]), got {x.shape}"
 
         return self.lin(x)
 
 
-def who_is_next(board: ConnectFour) -> int:
+def who_is_next(board: Tensor) -> int:
     """
     Return the player who is next to move.
     """
-    return 1 if board.state.sum() % 2 == 0 else 2
+    return 1 if board.sum() % 2 == 0 else 2
 
 
 def get_next_model_move(

@@ -7,20 +7,20 @@ from minimax import train_against_minimax_supervised
 if __name__ == "__main__":
     # HYPERPARAMETERS
     learning_rate = 0.005
-    batches = 200
-    eval_interval = 2
-    eval_games = 50
+    batches = 50
+    eval_interval = 5
+    eval_games = 25
     eval_depth = 2
     temperature = 1.0  # temperature for softmax
     epsilon = 0.0  # epsilon-greedy parameter
     gamma = 0.95
-    depth_teacher = 2
-    depth_opponent = 2
-    batch_size = 8
+    depth_teacher = 5
+    depth_opponent = 5
+    batch_size = 32
     load_model = True
     save_model = True
     use_wandb = True
-    save_prob = 0.0  # probability of saving a game
+    save_prob = 0.05  # probability of saving a game
 
     # initialize the model
     model = DecisionModel()
@@ -31,7 +31,7 @@ if __name__ == "__main__":
 
     # Initialize wandb
     if use_wandb:
-        run = wandb.init(project="connect_four")
+        run = wandb.init(project="connect_four", save_code=True)
 
     # count the number of parameters in the model
     num_params = sum(p.numel() for p in model.parameters())

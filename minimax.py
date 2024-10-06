@@ -1,5 +1,5 @@
 from engine import ConnectFour
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Dict
 from engine import is_in_terminal_state, make_move, is_legal
 from model import DecisionModel, get_next_model_move
 from torch import Tensor
@@ -7,6 +7,7 @@ import torch
 from utils import safe_log_to_wandb, SavedGame
 import random
 import numpy as np
+import time
 
 
 def minimax_move(board: ConnectFour, player: int, depth: int = 1) -> int:
@@ -545,5 +546,43 @@ def minimax_games(
     return saved_games
 
 
+def benchmark_minimax(num_games: int, test_depths: List[int]) -> Dict[int, float]:
+    """
+    Benchmark the minimax algorithm by playing num_games against itself with different depths.
+    Returns a dictionary with depths as keys and average time per move as values.
+    """
+    results: Dict[int, float] = {}
+
+    for depth in test_depths:
+        total_time = 0
+        total_moves = 0
+
+        for _ in range(num_games):
+            board = ConnectFour()
+            current_player = 1
+
+            while not is_in_terminal_state(board):
+                start_time = time.time()
+                move = minimax_move(board, current_player, depth)
+                end_time = time.time()
+
+                total_time += end_time - start_time
+                total_moves += 1
+
+                board = make_move(board, current_player, move)
+                current_player = 3 - current_player
+
+        avg_time_per_move = total_time / total_moves
+        results[depth] = avg_time_per_move
+
+    return results
+
+
 if __name__ == "__main__":
-    minimax_games(100, depth_player1=1, depth_player2=5, save_prob=0.0)
+    num_games = 10
+    test_depths = [1, 2, 3, 4, 5, 6, 7]
+    benchmark_results = benchmark_minimax(num_games, test_depths)
+
+    print("Benchmark results (average time per move in seconds):")
+    for depth, avg_time in benchmark_results.items():
+        print(f"Depth {depth}: {avg_time:.6f}s")
