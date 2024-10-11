@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
-from engine import ConnectFour, Move, is_legal
+from src.engine import ConnectFour, Move, is_legal
 import random
 from typing import Tuple
 from torch import Tensor

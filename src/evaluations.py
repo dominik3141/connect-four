@@ -1,5 +1,5 @@
-from engine import ConnectFour
-import engine
+from src.engine import ConnectFour
+import src.engine as engine
 from typing import Callable, Dict
 from model import DecisionModel, get_next_model_move
 from minimax import minimax_move

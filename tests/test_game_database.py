@@ -1,5 +1,5 @@
-from create_trainingdata import play_game
-from game_database import encode_game, decode_game
+from src.create_trainingdata import play_game
+from src.game_database import encode_game, decode_game
 import numpy as np
 
 

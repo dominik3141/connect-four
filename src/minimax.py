@@ -1,10 +1,10 @@
-from engine import ConnectFour
+from src.engine import ConnectFour
 from typing import Tuple, List, Optional, Dict
-from engine import is_in_terminal_state, make_move, is_legal
-from model import DecisionModel, get_next_model_move
+from src.engine import is_in_terminal_state, make_move, is_legal
+from src.model import DecisionModel, get_next_model_move
 from torch import Tensor
 import torch
-from utils import safe_log_to_wandb, SavedGame
+from src.utils import safe_log_to_wandb, SavedGame
 import random
 import numpy as np
 import time

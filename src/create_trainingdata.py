@@ -2,11 +2,11 @@
 Let two minimax agents play against each other and save the games.
 """
 
-from minimax import minimax_move
-from engine import ConnectFour
-from game_database import initialize_database, save_game
-from game_database import Game
-from engine import make_move, is_in_terminal_state
+from src.minimax import minimax_move
+from src.engine import ConnectFour
+from src.game_database import initialize_database, save_game
+from src.game_database import Game
+from src.engine import make_move, is_in_terminal_state
 
 
 def play_game(depth: int) -> Game:
