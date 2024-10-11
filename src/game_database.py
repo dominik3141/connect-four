@@ -151,22 +151,22 @@ def decode_board_state(encoded_bytes: bytes) -> BoardState:
 
 
 def bits_to_bytes(bits: List[int]) -> bytes:
-    """Converts a list of bits (0s and 1s) to a bytes object."""
+    """Converts a list of bits (0s and 1s) to a bytes object using little-endian bit order."""
     byte_array = bytearray()
     for i in range(0, len(bits), 8):
         byte = 0
         for j in range(8):
             if i + j < len(bits):
-                byte = (byte << 1) | bits[i + j]
+                byte |= bits[i + j] << j  # Set bit j (LSB first)
         byte_array.append(byte)
     return bytes(byte_array)
 
 
 def bytes_to_bits(byte_data: bytes, num_bits: int) -> List[int]:
-    """Converts a bytes object back to a list of bits."""
+    """Converts a bytes object back to a list of bits using little-endian bit order."""
     bits = []
     for byte in byte_data:
-        for i in range(7, -1, -1):
+        for i in range(8):  # Iterate from LSB to MSB
             bits.append((byte >> i) & 1)
     return bits[:num_bits]  # Trim to the desired number of bits
 
