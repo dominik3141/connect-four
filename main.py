@@ -20,7 +20,7 @@ if __name__ == "__main__":
     load_model = True
     save_model = True
     use_wandb = True
-    save_prob = 0.05  # probability of saving a game
+    save_prob = 0.0  # probability of saving a game
 
     # initialize the model
     model = DecisionModel()

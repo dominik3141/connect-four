@@ -6,11 +6,16 @@ import os
 import uuid
 from datetime import datetime
 
-BoardState = List[List[int]]
+BoardState = List[List[int]]  # can be accessed as board[row][column]
 
 
 @dataclass
 class SavedGame:
+    """
+    A class to save a game to a file.
+    Only used for the frontend.
+    """
+
     id: str
     depth_player1: int
     depth_player2: int
