@@ -1,18 +1,21 @@
-from src.engine import ConnectFour
+from engine import ConnectFour
 from typing import Tuple, List, Optional, Dict
-from src.engine import is_in_terminal_state, make_move, is_legal
-from src.model import DecisionModel, get_next_model_move
+from engine import is_in_terminal_state, make_move, is_legal
+from model import DecisionModel, get_next_model_move
 from torch import Tensor
 import torch
-from src.utils import safe_log_to_wandb, SavedGame
+from utils import safe_log_to_wandb, SavedGame
 import random
 import numpy as np
 import time
 
 
-def minimax_move(board: ConnectFour, player: int, depth: int = 1) -> int:
+def minimax_move(
+    board: ConnectFour, player: int, depth: int = 1, randomness: float = 0.1
+) -> int:
     """
     Determine the best legal move for the given player using the minimax algorithm with alpha-beta pruning.
+    Introduces randomness to the selection process.
     """
 
     def evaluate(board: ConnectFour, player: int) -> float:
@@ -156,7 +159,7 @@ def minimax_move(board: ConnectFour, player: int, depth: int = 1) -> int:
         if current_player == original_player:
             # Maximizing player
             value = float("-inf")
-            best_col = random.choice(valid_locations)
+            best_cols = []
             for col in valid_locations:
                 make_move(board, current_player, col)
                 new_score = minimax(
@@ -165,15 +168,17 @@ def minimax_move(board: ConnectFour, player: int, depth: int = 1) -> int:
                 undo_move(board, col)
                 if new_score > value:
                     value = new_score
-                    best_col = col
+                    best_cols = [col]
+                elif new_score == value:
+                    best_cols.append(col)
                 alpha = max(alpha, value)
                 if alpha >= beta:
                     break
-            return best_col, value
+            return random.choice(best_cols), value
         else:
             # Minimizing player
             value = float("inf")
-            best_col = random.choice(valid_locations)
+            best_cols = []
             for col in valid_locations:
                 make_move(board, current_player, col)
                 new_score = minimax(
@@ -182,13 +187,20 @@ def minimax_move(board: ConnectFour, player: int, depth: int = 1) -> int:
                 undo_move(board, col)
                 if new_score < value:
                     value = new_score
-                    best_col = col
+                    best_cols = [col]
+                elif new_score == value:
+                    best_cols.append(col)
                 beta = min(beta, value)
                 if alpha >= beta:
                     break
-            return best_col, value
+            return random.choice(best_cols), value
 
     best_move, _ = minimax(board, depth, float("-inf"), float("inf"), player, player)
+
+    # Introduce randomness
+    if random.random() < randomness:
+        valid_locations = get_valid_locations(board)
+        return random.choice(valid_locations)
 
     # Ensure the best move is legal
     if best_move is None or not is_legal(board, best_move):

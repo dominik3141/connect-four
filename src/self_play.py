@@ -1,6 +1,6 @@
-from src.ai import DecisionModel, get_next_model_move, loss_fn
-from src.engine import ConnectFour, make_move, is_in_terminal_state
-from src.evaluations import evaluate_model, log_evaluation_results
+from ai import DecisionModel, get_next_model_move, loss_fn
+from engine import ConnectFour, make_move, is_in_terminal_state
+from evaluations import evaluate_model, log_evaluation_results
 import torch
 from torch import Tensor
 from typing import Tuple

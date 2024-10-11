@@ -1,7 +1,7 @@
 import torch
 import wandb
-from src.model import DecisionModel
-from src.minimax import train_against_minimax_supervised
+from model import DecisionModel
+from minimax import train_against_minimax_supervised
 
 
 if __name__ == "__main__":

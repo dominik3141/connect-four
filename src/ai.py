@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 import wandb
-from src.utils import safe_log_to_wandb
+from utils import safe_log_to_wandb
 
 
 def loss_fn(
