@@ -1,4 +1,5 @@
-from ai import DecisionModel, get_next_model_move, loss_fn
+from ai import loss_fn
+from model import DecisionModel, get_next_model_move
 from engine import ConnectFour, make_move, is_in_terminal_state
 from evaluations import evaluate_model, log_evaluation_results
 import torch

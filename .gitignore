@@ -4,3 +4,4 @@ model.pth
 saved_games/
 games.sqlite
 notes.md
+.pytest_cache/
