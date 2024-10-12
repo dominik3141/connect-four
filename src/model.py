@@ -26,34 +26,31 @@ class DecisionModel(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Convert input to shape (7, 6)
-        x = x.view(7, 6)
-        player1_board = (x == 1).float().view(-1)
-        player2_board = (x == 2).float().view(-1)
-        x = torch.cat([player1_board, player2_board], dim=0)  # Shape: (7 * 6 * 2)
+        # Convert input to shape (batch_size, 7, 6)
+        x = x.view(-1, 7, 6)
 
-        assert x.shape == torch.Size(
-            [7 * 6 * 2]
-        ), f"Expected shape torch.Size([7 * 6 * 2]), got {x.shape}"
+        player1_board = (x == 1).float().view(-1, 7 * 6)
+        player2_board = (x == 2).float().view(-1, 7 * 6)
+        x = torch.cat(
+            [player1_board, player2_board], dim=-1
+        )  # Shape: (batch_size, 7 * 6 * 2)
 
-        # find out who is next to move
+        # Calculate next player for each board in the batch
         next_player = who_is_next(x)
 
-        # tell the model who is next to move
-        x = torch.cat([x, torch.Tensor([next_player])], dim=0)
-
-        assert x.shape == torch.Size(
-            [7 * 6 * 2 + 1]
-        ), f"Expected shape torch.Size([7 * 6 * 2 + 1]), got {x.shape}"
+        x = torch.cat([x, next_player.unsqueeze(1)], dim=-1)
 
         return self.lin(x)
 
 
-def who_is_next(board: Tensor) -> int:
+def who_is_next(board: torch.Tensor) -> torch.Tensor:
     """
-    Return the player who is next to move.
+    Return the player who is next to move for each board in the batch.
     """
-    return 1 if board.sum() % 2 == 0 else 2
+    # Sum along the last dimension and check if even
+    is_player1_next = (board.sum(dim=-1) % 2 == 0).float()
+    # Convert to 1 for player 1, 2 for player 2
+    return is_player1_next + (1 - is_player1_next) * 2
 
 
 def get_next_model_move(
@@ -66,7 +63,7 @@ def get_next_model_move(
     Return the move and the probability of the move, ensuring only legal moves are selected.
     """
     while True:
-        state_tensor = torch.Tensor(board.state).view(7 * 6).float()
+        state_tensor = torch.Tensor(board.state).view(1, 7 * 6).float()
         logits = model(state_tensor)
 
         # Create a mask for legal moves, explicitly converting to int
@@ -79,7 +76,7 @@ def get_next_model_move(
         if temperature != 1.0:
             masked_logits = masked_logits / temperature
 
-        probs = F.softmax(masked_logits, dim=-1)
+        probs = F.softmax(masked_logits, dim=-1).view(-1)
 
         distribution = Categorical(probs)
 

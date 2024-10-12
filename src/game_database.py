@@ -10,6 +10,7 @@ import sqlite3
 import hashlib
 import datetime
 import os
+import numpy as np
 
 BoardState = List[
     List[int]
@@ -94,6 +95,23 @@ def save_game(game: Game) -> None:
             )
 
         connection.commit()
+
+
+def show_game(game: Game) -> None:
+    """Print a game to the console."""
+    for board in game:
+        print("-" * 21)
+        for row in board:
+            print("|", " ".join(str(cell) for cell in row), "|")
+
+
+def decode_random_game() -> Game:
+    """Decode a random game from the database."""
+    with sqlite3.connect(DATABASE_FILE) as connection:
+        cursor = connection.cursor()
+        cursor.execute("SELECT game FROM games ORDER BY RANDOM() LIMIT 1")
+        encoded_game = cursor.fetchone()[0]
+    return decode_game(encoded_game)
 
 
 def calculate_hash(game: Game) -> str:

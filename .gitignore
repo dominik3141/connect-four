@@ -2,3 +2,5 @@ wandb/
 __pycache__/
 model.pth
 saved_games/
+games.sqlite
+notes.md

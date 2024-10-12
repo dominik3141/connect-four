@@ -17,7 +17,7 @@ def play_game(depth: int) -> Game:
     # play the game
     while True:
         for player in [1, 2]:
-            move = minimax_move(board, player, depth)
+            move = minimax_move(board, player, depth, randomness=0.0)
 
             # make the move
             board = make_move(board, player, move)
@@ -32,11 +32,13 @@ def play_game(depth: int) -> Game:
 
 if __name__ == "__main__":
     NUM_GAMES = 100
-    DEPTH = 3
+    DEPTH = 5
 
     # initialize the database
     initialize_database()
 
-    for _ in range(NUM_GAMES):
+    for i in range(NUM_GAMES):
         game = play_game(DEPTH)
+
+        print(f"Saved game {i+1} of {NUM_GAMES}")
         save_game(game)
