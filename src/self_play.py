@@ -51,7 +51,6 @@ def train_using_self_play(
     model: DecisionModel,
     iterations: int = 100,
     learning_rate: float = 0.01,
-    run=None,
     eval_interval: int = 100,
     temperature: float = 1.0,
     epsilon: float = 0,

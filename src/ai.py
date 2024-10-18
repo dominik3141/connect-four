@@ -21,8 +21,7 @@ def loss_fn(
     else:  # if no win ratio is provided, the reward is 5
         win_reward = 5
 
-    if wandb.run is not None:
-        safe_log_to_wandb({"win_reward": win_reward})
+    safe_log_to_wandb({"win_reward": win_reward})
 
     if outcome == 3:  # Draw
         reward = -0.5
@@ -33,16 +32,6 @@ def loss_fn(
         raise ValueError("Invalid outcome")
     else:  # Player loses
         reward = -1.0
-
-    # Modify reward based on confidence (probs)
-    # For wins: lower confidence => higher reward
-    # For losses: higher confidence => higher penalty
-    # if outcome == player:
-    #     # Reverse confidence scaling for smart moves with low confidence
-    #     discounted_losses = reward * (2 - probs)  # More reward for lower confidence
-    # else:
-    #     # Increase penalty for high-confidence bad moves
-    #     discounted_losses = reward * probs  # More penalty for higher confidence
 
     num_moves = len(probs)
     discount_factors = torch.tensor([gamma**i for i in range(num_moves)])
@@ -57,8 +46,7 @@ def loss_fn(
     loss = -loss
 
     # log the reward to wandb
-    if wandb.run is not None:
-        safe_log_to_wandb({"reward": reward})
+    safe_log_to_wandb({"reward": reward})
 
     print(f"DEBUG: reward: {reward}, discounted_losses: {discounted_losses}")
     print(f"DEBUG: probs: {probs}")
