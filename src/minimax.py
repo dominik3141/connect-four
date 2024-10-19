@@ -8,207 +8,27 @@ from utils import safe_log_to_wandb, SavedGame
 import random
 import numpy as np
 import time
+import ctypes
+
+# Load the shared library
+lib = ctypes.CDLL("libs/libconnect4.so")  # Use the correct path for your system
+
+# Define the argument and return types for the C function
+lib.minimax_move.argtypes = [
+    ctypes.POINTER(ctypes.c_int),  # Board state (flattened)
+    ctypes.c_int,  # Player
+    ctypes.c_int,  # Depth
+]
+lib.minimax_move.restype = ctypes.c_int  # The best move as an integer
 
 
-def minimax_move(
-    board: ConnectFour, player: int, depth: int = 1, randomness: float = 0.1
-) -> int:
-    """
-    Determine the best legal move for the given player using the minimax algorithm with alpha-beta pruning.
-    Introduces randomness to the selection process.
-    """
+def minimax_move(board: ConnectFour, player: int, depth: int = 1) -> int:
+    # Flatten the board state to pass it to the C function
+    flat_state = board.state.flatten().astype(np.int32)
+    flat_state_p = flat_state.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
 
-    def evaluate(board: ConnectFour, player: int) -> float:
-        """
-        Evaluate the current board state. Positive scores favor the current player,
-        negative scores favor the opponent.
-        """
-        WINDOW_LENGTH = 4
-        score = 0
-
-        # Center column preference
-        center_array = [board.state[r][3] for r in range(6)]
-        center_count = center_array.count(player)
-        score += center_count * 3
-
-        # Score Horizontal
-        for r in range(6):
-            row_array = board.state[r]
-            for c in range(7 - 3):
-                window = row_array[c : c + WINDOW_LENGTH]
-                score += evaluate_window(window, player)
-
-        # Score Vertical
-        for c in range(7):
-            col_array = [board.state[r][c] for r in range(6)]
-            for r in range(6 - 3):
-                window = col_array[r : r + WINDOW_LENGTH]
-                score += evaluate_window(window, player)
-
-        # Score positive sloped diagonals
-        for r in range(6 - 3):
-            for c in range(7 - 3):
-                window = [board.state[r + i][c + i] for i in range(WINDOW_LENGTH)]
-                score += evaluate_window(window, player)
-
-        # Score negative sloped diagonals
-        for r in range(3, 6):
-            for c in range(7 - 3):
-                window = [board.state[r - i][c + i] for i in range(WINDOW_LENGTH)]
-                score += evaluate_window(window, player)
-
-        return score
-
-    def evaluate_window(window: np.ndarray, player: int) -> int:
-        """
-        Evaluate the score of a window (4 consecutive cells) for the given player.
-        """
-        score = 0
-        opp_player = 3 - player
-
-        if np.count_nonzero(window == player) == 4:
-            # 4 in a row is a win
-            score += 100
-        elif (
-            # 3 in a row is a good position
-            np.count_nonzero(window == player) == 3
-            and np.count_nonzero(window == 0) == 1
-        ):
-            score += 5
-        elif (
-            # 2 in a row
-            np.count_nonzero(window == player) == 2
-            and np.count_nonzero(window == 0) == 2
-        ):
-            score += 2
-
-        if (
-            # 3 in a row for opponent
-            np.count_nonzero(window == opp_player) == 3
-            and np.count_nonzero(window == 0) == 1
-        ):
-            score -= 4
-
-        return score
-
-    def is_terminal_node(board: ConnectFour) -> bool:
-        """
-        Check if the current board is a terminal node (win, loss, or draw).
-        """
-        return is_in_terminal_state(board) != 0 or len(get_valid_locations(board)) == 0
-
-    def get_valid_locations(board: ConnectFour) -> List[int]:
-        """
-        Get a list of valid columns where a move can be made.
-        """
-        return [col for col in range(7) if is_legal(board, col)]
-
-    def get_next_open_row(board: ConnectFour, col: int) -> Optional[int]:
-        """
-        Get the next open row in the specified column.
-        """
-        for r in range(5, -1, -1):
-            if board.state[r][col] == 0:
-                return r
-        return None
-
-    def make_move(board: ConnectFour, player: int, col: int):
-        """
-        Place the player's piece in the specified column.
-        """
-        row = get_next_open_row(board, col)
-        if row is not None:
-            board.state[row][col] = player
-
-    def undo_move(board: ConnectFour, col: int):
-        """
-        Remove the top piece from the specified column.
-        """
-        for r in range(6):
-            if board.state[r][col] != 0:
-                board.state[r][col] = 0
-                break
-
-    def minimax(
-        board: ConnectFour,
-        depth: int,
-        alpha: float,
-        beta: float,
-        current_player: int,
-        original_player: int,
-    ) -> Tuple[Optional[int], float]:
-        """
-        Minimax algorithm with alpha-beta pruning.
-        Returns the best column and its evaluation score.
-        """
-        valid_locations = get_valid_locations(board)
-        is_terminal = is_terminal_node(board)
-
-        if depth == 0 or is_terminal:
-            if is_terminal:
-                status = is_in_terminal_state(board)
-                if status == original_player:
-                    return (None, float("inf"))
-                elif status == 3 - original_player:
-                    return (None, float("-inf"))
-                else:  # Game is a draw
-                    return (None, 0)
-            else:
-                return (None, evaluate(board, original_player))
-
-        if current_player == original_player:
-            # Maximizing player
-            value = float("-inf")
-            best_cols = []
-            for col in valid_locations:
-                make_move(board, current_player, col)
-                new_score = minimax(
-                    board, depth - 1, alpha, beta, 3 - current_player, original_player
-                )[1]
-                undo_move(board, col)
-                if new_score > value:
-                    value = new_score
-                    best_cols = [col]
-                elif new_score == value:
-                    best_cols.append(col)
-                alpha = max(alpha, value)
-                if alpha >= beta:
-                    break
-            return random.choice(best_cols), value
-        else:
-            # Minimizing player
-            value = float("inf")
-            best_cols = []
-            for col in valid_locations:
-                make_move(board, current_player, col)
-                new_score = minimax(
-                    board, depth - 1, alpha, beta, 3 - current_player, original_player
-                )[1]
-                undo_move(board, col)
-                if new_score < value:
-                    value = new_score
-                    best_cols = [col]
-                elif new_score == value:
-                    best_cols.append(col)
-                beta = min(beta, value)
-                if alpha >= beta:
-                    break
-            return random.choice(best_cols), value
-
-    best_move, _ = minimax(board, depth, float("-inf"), float("inf"), player, player)
-
-    # Introduce randomness
-    if random.random() < randomness:
-        valid_locations = get_valid_locations(board)
-        return random.choice(valid_locations)
-
-    # Ensure the best move is legal
-    if best_move is None or not is_legal(board, best_move):
-        valid_locations = get_valid_locations(board)
-        if valid_locations:
-            best_move = random.choice(valid_locations)
-        else:
-            raise ValueError("No valid moves available")
+    # Call the C function
+    best_move = lib.minimax_move(flat_state_p, player, depth)
 
     return best_move
 
@@ -590,11 +410,23 @@ def benchmark_minimax(num_games: int, test_depths: List[int]) -> Dict[int, float
     return results
 
 
+# Example usage
 if __name__ == "__main__":
-    num_games = 10
-    test_depths = [1, 2, 3, 4, 5, 6, 7]
-    benchmark_results = benchmark_minimax(num_games, test_depths)
+    # Initialize a sample board with a winning row for Player 1
+    sample_state = np.array(
+        [
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0],
+            [1, 1, 1, 0, 0, 0, 0],
+            [2, 2, 1, 2, 0, 0, 0],
+        ]
+    )
 
-    print("Benchmark results (average time per move in seconds):")
-    for depth, avg_time in benchmark_results.items():
-        print(f"Depth {depth}: {avg_time:.6f}s")
+    board = ConnectFour(sample_state)
+    print("Board State:")
+    print(board)
+
+    best_move = minimax_move(board, player=1, depth=7)
+    print(f"Best Move: {best_move}")
