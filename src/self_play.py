@@ -5,6 +5,7 @@ from evaluations import evaluate_model, log_evaluation_results
 import torch
 from torch import Tensor
 from typing import Tuple
+from utils import safe_log_to_wandb
 
 
 def play_against_self(
@@ -54,6 +55,8 @@ def train_using_self_play(
     eval_interval: int = 100,
     temperature: float = 1.0,
     epsilon: float = 0,
+    eval_games: int = 100,
+    eval_depth: int = 2,
 ) -> DecisionModel:
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -64,14 +67,22 @@ def train_using_self_play(
             model, temperature=temperature, epsilon=epsilon
         )
 
+        loss1 = loss_fn(ai1_move_probs, status, player=1)
         loss2 = loss_fn(ai2_move_probs, status, player=2)
-        loss = loss2
+
+        loss = loss1 + loss2
+
+        # log the loss to wandb
+        safe_log_to_wandb({"loss": loss})
+
         loss.backward()
         optimizer.step()
 
         # Evaluate the model every eval_interval iterations
         if i % eval_interval == 0:
-            eval_results = evaluate_model(model)
+            eval_results = evaluate_model(
+                model, num_games=eval_games, depth_for_minimax=eval_depth
+            )
             log_evaluation_results(eval_results)
 
     return model

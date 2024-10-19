@@ -1,6 +1,6 @@
 from engine import ConnectFour
-from typing import Tuple, List, Optional, Dict
-from engine import is_in_terminal_state, make_move, is_legal
+from typing import Tuple, List, Dict
+from engine import is_in_terminal_state, make_move
 from model import DecisionModel, get_next_model_move
 from torch import Tensor
 import torch

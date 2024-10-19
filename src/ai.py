@@ -10,6 +10,7 @@ def loss_fn(
     win_ratio: float = None,
     player: int = 2,
     gamma: float = 0.5,
+    debug: bool = False,
 ) -> Tensor:
     def calc_win_reward(win_ratio: float) -> float:
         return max(
@@ -20,8 +21,6 @@ def loss_fn(
         win_reward = calc_win_reward(win_ratio)
     else:  # if no win ratio is provided, the reward is 5
         win_reward = 5
-
-    safe_log_to_wandb({"win_reward": win_reward})
 
     if outcome == 3:  # Draw
         reward = -0.5
@@ -45,11 +44,9 @@ def loss_fn(
     # change the sign of the loss (in order for rewards to be maximized)
     loss = -loss
 
-    # log the reward to wandb
-    safe_log_to_wandb({"reward": reward})
-
-    print(f"DEBUG: reward: {reward}, discounted_losses: {discounted_losses}")
-    print(f"DEBUG: probs: {probs}")
-    print(f"DEBUG: loss: {loss}")
+    if debug:
+        print(f"DEBUG: reward: {reward}, discounted_losses: {discounted_losses}")
+        print(f"DEBUG: probs: {probs}")
+        print(f"DEBUG: loss: {loss}")
 
     return loss

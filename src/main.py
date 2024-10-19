@@ -7,21 +7,18 @@ from self_play import train_using_self_play
 if __name__ == "__main__":
     # HYPERPARAMETERS
     hyperparams = {
-        "learning_rate": 0.005,
-        "batches": 50,
-        "eval_interval": 5,
-        "eval_games": 25,
-        "eval_depth": 2,
+        "iterations": 1000,  # number of games to play
+        "learning_rate": 0.001,
+        "eval_interval": 50,
+        "eval_games": 25,  # number of games to play in evaluation
+        "eval_depth": 4,  # depth for minimax
         "temperature": 1.0,  # temperature for softmax
-        "epsilon": 0.0,  # epsilon-greedy parameter
+        "epsilon": 0.1,  # epsilon-greedy parameter
         "gamma": 0.95,
-        "depth_teacher": 5,
-        "depth_opponent": 5,
-        "batch_size": 32,
-        "load_model": True,
-        "save_model": True,
+        "load_model": False,
+        "save_model": False,
         "use_wandb": True,
-        "save_prob": 0.0,  # probability of saving a game
+        "save_prob": 0.001,  # probability of saving a game
     }
 
     # initialize the model
@@ -47,7 +44,7 @@ if __name__ == "__main__":
 
     # log the model architecture
     if hyperparams["use_wandb"]:
-        wandb.watch(model, log="all", log_freq=hyperparams["batch_size"])
+        wandb.watch(model, log="all", log_freq=100)
         wandb.config.update(hyperparams)
 
     ###########################################################################
@@ -62,6 +59,8 @@ if __name__ == "__main__":
         eval_interval=hyperparams["eval_interval"],
         temperature=hyperparams["temperature"],
         epsilon=hyperparams["epsilon"],
+        eval_games=hyperparams["eval_games"],
+        eval_depth=hyperparams["eval_depth"],
     )
 
     ###########################################################################
