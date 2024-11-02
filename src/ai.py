@@ -1,7 +1,5 @@
 import torch
 from torch import Tensor
-import wandb
-from utils import safe_log_to_wandb
 
 
 def loss_fn(
@@ -12,25 +10,14 @@ def loss_fn(
     gamma: float = 0.5,
     debug: bool = False,
 ) -> Tensor:
-    def calc_win_reward(win_ratio: float) -> float:
-        return max(
-            200 * (1 - win_ratio), 10
-        )  # if winning is sparse, the reward is higher
-
-    if win_ratio is not None:
-        win_reward = calc_win_reward(win_ratio)
-    else:  # if no win ratio is provided, the reward is 5
-        win_reward = 5
-
-    if outcome == 3:  # Draw
-        reward = -0.5
-    elif outcome == player:  # Player wins
-        reward = win_reward
-    elif outcome == 0:  # invalid outcome
-        # crash the program
-        raise ValueError("Invalid outcome")
-    else:  # Player loses
+    if outcome == 2:  # AI wins
+        reward = 1.0
+    elif outcome == 1:  # Player wins
         reward = -1.0
+    elif outcome == 3:  # Draw
+        reward = 0.0
+    else:  # invalid outcome
+        raise ValueError("Invalid outcome")
 
     num_moves = len(probs)
     discount_factors = torch.tensor([gamma**i for i in range(num_moves)])

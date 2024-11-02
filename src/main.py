@@ -2,23 +2,25 @@ import torch
 import wandb
 from model import DecisionModel
 from self_play import train_using_self_play
+import signal
+import sys
 
 
 if __name__ == "__main__":
     # HYPERPARAMETERS
     hyperparams = {
-        "iterations": 1000,  # number of games to play
+        "iterations": 1000000,  # number of games to play
         "learning_rate": 0.001,
         "eval_interval": 50,
-        "eval_games": 25,  # number of games to play in evaluation
-        "eval_depth": 4,  # depth for minimax
-        "temperature": 1.0,  # temperature for softmax
+        "eval_games": 100,  # number of games to play in evaluation
+        "eval_depth": 7,  # depth for minimax
+        "temperature": 1.5,  # temperature for softmax
         "epsilon": 0.1,  # epsilon-greedy parameter
         "gamma": 0.95,
         "load_model": False,
-        "save_model": False,
+        "save_model": True,
         "use_wandb": True,
-        "save_prob": 0.001,  # probability of saving a game
+        "save_prob": 0.1,  # probability of saving a game
     }
 
     # initialize the model
@@ -47,21 +49,37 @@ if __name__ == "__main__":
         wandb.watch(model, log="all", log_freq=100)
         wandb.config.update(hyperparams)
 
+    # Add signal handler for graceful shutdown
+    def signal_handler(sig, frame):
+        print("\nCtrl+C detected. Saving model and exiting...")
+        if hyperparams["save_model"]:
+            torch.save(model.state_dict(), "model.pth")
+            if hyperparams["use_wandb"]:
+                wandb.save("model.pth")
+        if hyperparams["use_wandb"]:
+            run.finish()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+
     ###########################################################################
     # TRAINING
     ###########################################################################
 
-    # train the model using self-play
-    model = train_using_self_play(
-        model,
-        iterations=hyperparams["iterations"],
-        learning_rate=hyperparams["learning_rate"],
-        eval_interval=hyperparams["eval_interval"],
-        temperature=hyperparams["temperature"],
-        epsilon=hyperparams["epsilon"],
-        eval_games=hyperparams["eval_games"],
-        eval_depth=hyperparams["eval_depth"],
-    )
+    try:
+        # train the model using self-play
+        model = train_using_self_play(
+            model,
+            iterations=hyperparams["iterations"],
+            learning_rate=hyperparams["learning_rate"],
+            eval_interval=hyperparams["eval_interval"],
+            temperature=hyperparams["temperature"],
+            epsilon=hyperparams["epsilon"],
+            eval_games=hyperparams["eval_games"],
+            eval_depth=hyperparams["eval_depth"],
+        )
+    except KeyboardInterrupt:
+        print("\nTraining interrupted. Saving model and exiting...")
 
     ###########################################################################
 

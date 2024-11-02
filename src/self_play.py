@@ -6,6 +6,7 @@ import torch
 from torch import Tensor
 from typing import Tuple
 from utils import safe_log_to_wandb
+import random
 
 
 def play_against_self(
@@ -57,8 +58,10 @@ def train_using_self_play(
     epsilon: float = 0,
     eval_games: int = 100,
     eval_depth: int = 2,
+    log_interval: int = 100,
 ) -> DecisionModel:
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    loss_history: list[float] = []
 
     for i in range(iterations):
         optimizer.zero_grad()
@@ -70,19 +73,27 @@ def train_using_self_play(
         loss1 = loss_fn(ai1_move_probs, status, player=1)
         loss2 = loss_fn(ai2_move_probs, status, player=2)
 
-        loss = loss1 + loss2
+        # randomly choose which loss to backpropagate
+        if random.random() < 0.5:
+            loss = loss1
+        else:
+            loss = loss2
 
-        # log the loss to wandb
-        safe_log_to_wandb({"loss": loss})
+        loss_history.append(loss.item())
+
+        if (i + 1) % log_interval == 0:
+            avg_loss = sum(loss_history[-log_interval:]) / log_interval
+            safe_log_to_wandb({"avg_loss": avg_loss})
+            loss_history = []  # Reset the history after logging
 
         loss.backward()
         optimizer.step()
 
         # Evaluate the model every eval_interval iterations
-        if i % eval_interval == 0:
-            eval_results = evaluate_model(
-                model, num_games=eval_games, depth_for_minimax=eval_depth
-            )
-            log_evaluation_results(eval_results)
+        # if i % eval_interval == 0:
+        #     eval_results = evaluate_model(
+        #         model, num_games=eval_games, depth_for_minimax=eval_depth
+        #     )
+        #     log_evaluation_results(eval_results)
 
     return model
