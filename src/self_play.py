@@ -1,20 +1,23 @@
 from model import DecisionModel, ValueModel, get_next_model_move
 from engine import ConnectFour, make_move, is_in_terminal_state
 import torch
+import torch.nn.functional as F
 from torch import Tensor
-from typing import Tuple
-from utils import safe_log_to_wandb
+from typing import Tuple, List, Optional
+from utils import safe_log_to_wandb, create_board_image
+import wandb
+import numpy as np
 
 
 def board_to_tensor(board: ConnectFour) -> Tensor:
-    """Convert a ConnectFour board to a tensor representation."""
+    """Convert a ConnectFour board to a tensor representation consistent with model expectations."""
     # Convert numpy array to tensor and transpose to match our expected format
     # The state is 6x7, we want 7x6
     tensor = torch.from_numpy(board.state).float()
     tensor = tensor.t()  # transpose to get 7x6
 
-    # Convert player 2's pieces from 2 to -1
-    tensor[tensor == 2] = -1
+    # Player 1 is 1.0, Player 2 is 2.0, Empty is 0.0
+    # No conversion needed as models expect this representation.
 
     # Make the tensor contiguous in memory
     return tensor.contiguous()
@@ -23,147 +26,239 @@ def board_to_tensor(board: ConnectFour) -> Tensor:
 def play_against_self(
     policy_model: DecisionModel,
     value_model: ValueModel,
+    discount_factor: float,
     temperature: float = 1.0,
     epsilon: float = 0,
-    learning_rate: float = 0.01,
-) -> Tuple[Tensor, Tensor, int]:
+) -> Tuple[Tensor, Tensor, int, float, ConnectFour]:
     """
-    Play a game where the model plays against itself.
-    Returns the move probabilities for both players and the game outcome.
+    Play a game where the model plays against itself using TD learning for both actor and critic.
+    Returns the total policy loss, total value loss, game outcome, average policy entropy,
+    and the final board state.
     """
     board = ConnectFour()
-    player_1_value_estimates = []
-    player_2_value_estimates = []
+    # Use lists to accumulate tensors for loss terms and scalars for entropy
+    policy_loss_terms: List[Tensor] = []
+    value_loss_terms: List[Tensor] = []
+    entropies: List[float] = []
     current_player = 1
-    optimizer_policy = torch.optim.Adam(policy_model.parameters(), lr=learning_rate)
+    final_board = board
 
-    board_tensor = board_to_tensor(board)
-    old_value = value_model(board_tensor, current_player)
     while True:
-        move, prob = get_next_model_move(
-            policy_model, board, temperature=temperature, epsilon=epsilon
+        board_tensor = board_to_tensor(final_board)
+        # Ensure requires_grad is true for value model input if needed downstream
+        # board_tensor.requires_grad_(True) # Usually not needed if model params require grad
+
+        # Value estimate BEFORE the move
+        old_value: Tensor = value_model(board_tensor, current_player)
+
+        # Get move, probability, and entropy
+        move, prob, entropy = get_next_model_move(
+            policy_model, final_board, temperature=temperature, epsilon=epsilon
         )
-        # execute the move
-        board = make_move(board, current_player, move)
+        entropies.append(entropy.item())
 
-        # calculate the loss for the move based on the value model
-        board_tensor = board_to_tensor(board)
-        value = value_model(board_tensor, current_player)
+        # Execute the move
+        next_board = make_move(final_board, current_player, move)
+        next_board_tensor = board_to_tensor(next_board)
+        status = is_in_terminal_state(next_board)
 
-        # Calculate the TD error (simplified advantage)
-        td_error = (
-            value - old_value
-        ).detach()  # Detach: critic guides actor, but actor gradients shouldn't flow back into critic here
+        # Determine reward and next state value, ensuring correct shape [1, 1]
+        reward_val = 0.0
+        # Ensure next_value is always [1, 1] and on the correct device
+        next_value = torch.zeros_like(old_value)  # Estimate of V(S_t+1, O)
 
-        # Calculate policy loss: -log_prob * TD_error
-        # We want to increase the log_prob of actions that led to a positive TD_error
-        # Loss is negative log_prob * TD_error to achieve this via gradient descent
-        # Add epsilon for numerical stability against log(0)
-        epsilon_log = 1e-9
-        policy_loss = -torch.log(prob + epsilon_log) * td_error
+        td_target = torch.zeros_like(old_value)  # Initialize target
 
-        # adjust the policy model based on the loss
-        optimizer_policy.zero_grad()
-        policy_loss.backward()
-        # Clip gradients to prevent explosion
-        torch.nn.utils.clip_grad_norm_(policy_model.parameters(), max_norm=1.0)
-        optimizer_policy.step()
-
-        if current_player == 1:
-            player_1_value_estimates.append(value)  # keep computation graph
+        if status != 0:  # Game ended after this move
+            # Player who just moved is current_player (P)
+            if status == current_player:  # P Won
+                td_target = torch.tensor([[1.0]], device=old_value.device)
+            elif status == 3:  # Draw
+                td_target = torch.tensor([[0.5]], device=old_value.device)
+            else:  # P Lost (Opponent O Won)
+                td_target = torch.tensor([[0.0]], device=old_value.device)
+            # next_value remains [[0.0]] as game is over, not needed for target here
         else:
-            player_2_value_estimates.append(value)  # keep computation graph
+            # Game continues, estimate opponent's value in the next state V(S_t+1, O)
+            next_player = 3 - current_player  # Opponent (O)
+            # next_value estimates V(S_t+1, O)
+            next_value = value_model(next_board_tensor, next_player).detach()
+            # Target for V(S_t, P) is gamma * (1 - V(S_t+1, O))
+            # Note: Reward R_t+1 is 0 here.
+            td_target = discount_factor * (1.0 - next_value)
 
-        if is_in_terminal_state(board) != 0:
-            break
+        # Calculate Value Loss term (e.g., MSE loss)
+        # Loss pushes old_value (V(S_t, P)) towards the correctly calculated td_target
+        value_loss_term = F.mse_loss(old_value, td_target)  # [1, 1] vs [1, 1]
 
-        current_player = 3 - current_player  # Switch player
-        old_value = value
+        # Calculate TD Error (Advantage) for the Policy Model (Actor)
+        # Advantage = Target - V(S_t)
+        # Use the same, correctly calculated td_target
+        advantage = (td_target - old_value).detach()  # Detach: Critic guides Actor
 
-    status = is_in_terminal_state(board)
+        # Calculate Policy Loss term: -log_prob * Advantage
+        epsilon_log = 1e-9
+        policy_loss_term = -torch.log(prob + epsilon_log) * advantage
 
-    # Reverse the move probabilities for correct discounting
-    player_1_value_estimates.reverse()
-    player_2_value_estimates.reverse()
+        # Append loss tensors to lists
+        policy_loss_terms.append(policy_loss_term)
+        value_loss_terms.append(value_loss_term)
 
-    player_1_value_estimates_tensor = torch.stack(player_1_value_estimates)
-    player_2_value_estimates_tensor = torch.stack(player_2_value_estimates)
+        final_board = next_board
 
-    return player_1_value_estimates_tensor, player_2_value_estimates_tensor, status
+        if status != 0:
+            break  # Game ended
+
+        # Prepare for next iteration
+        current_player = 3 - current_player
+        # old_value becomes the value estimate calculated in the next loop's start
+
+    # Return the accumulated losses for the entire game
+    # The status is from the perspective of the *board*, not the player who just moved
+    # final_status = is_in_terminal_state(final_board) # Use status from loop end
+
+    # Sum the losses from the lists
+    total_policy_loss = (
+        torch.stack(policy_loss_terms).sum() if policy_loss_terms else torch.tensor(0.0)
+    )
+    total_value_loss = (
+        torch.stack(value_loss_terms).sum() if value_loss_terms else torch.tensor(0.0)
+    )
+
+    # Calculate average entropy for the game
+    avg_entropy = sum(entropies) / len(entropies) if entropies else 0.0
+
+    # Return final status, avg entropy, and the final board object
+    return total_policy_loss, total_value_loss, status, avg_entropy, final_board
 
 
 def train_using_self_play(
     policy_model: DecisionModel,
     value_model: ValueModel,
-    iterations: int = 100,
-    learning_rate: float = 0.01,
+    iterations: int = 1000,  # Now refers to batches
+    batch_size: int = 32,  # Number of games per batch
+    log_interval: int = 10,  # Log every N batches
+    learning_rate: float = 0.001,  # Adjusted LR might be needed
     temperature: float = 1.0,
-    epsilon: float = 0,
-    discount_factor: float = 0.1,
+    epsilon: float = 0.1,  # Slightly higher default epsilon?
+    discount_factor: float = 0.95,
 ) -> None:
+    optimizer_policy = torch.optim.Adam(policy_model.parameters(), lr=learning_rate)
     optimizer_value = torch.optim.Adam(value_model.parameters(), lr=learning_rate)
-    running_loss = 0.0
-    iteration_count = 0
+
+    # Running metrics, reset every log_interval batches
+    running_value_loss = 0.0
+    running_policy_loss = 0.0
+    running_entropy = 0.0
+    total_games_played = 0
+    last_final_board_state: Optional[np.ndarray] = None
+
+    print(f"Starting training for {iterations} batches of size {batch_size}...")
 
     for i in range(iterations):
+        # Accumulators for the current batch
+        batch_policy_loss = torch.tensor(0.0, requires_grad=True)
+        batch_value_loss = torch.tensor(0.0, requires_grad=True)
+        batch_entropy_sum = 0.0
+        batch_games = 0
+
+        # --- Play Batch ---
+        for game_idx in range(batch_size):
+            total_policy_loss, total_value_loss, status, avg_entropy, final_board = (
+                play_against_self(
+                    policy_model,
+                    value_model,
+                    discount_factor=discount_factor,
+                    temperature=temperature,
+                    epsilon=epsilon,
+                )
+            )
+
+            # Accumulate losses for the batch
+            batch_policy_loss = batch_policy_loss + total_policy_loss
+            batch_value_loss = batch_value_loss + total_value_loss
+            batch_entropy_sum += avg_entropy
+            batch_games += 1
+            total_games_played += 1
+
+            # Store the state of the very last board played in the batch
+            if game_idx == batch_size - 1:
+                last_final_board_state = final_board.state.copy()
+
+        if batch_games == 0:
+            print(f"Warning: Batch {i + 1} completed with 0 games.")
+            continue  # Skip update if no games were played
+
+        # --- Update Models ---
+        avg_batch_policy_loss = batch_policy_loss / batch_games
+        avg_batch_value_loss = batch_value_loss / batch_games
+
+        # Zero gradients before backpropagation for the batch
+        optimizer_policy.zero_grad()
         optimizer_value.zero_grad()
 
-        player_1_value_estimates, player_2_value_estimates, status = play_against_self(
-            policy_model, value_model, temperature=temperature, epsilon=epsilon
-        )
+        # Backpropagate average losses
+        if avg_batch_policy_loss.requires_grad:
+            avg_batch_policy_loss.backward()
+        else:
+            print(f"Warning: Batch {i + 1} Policy loss has no grad.")
 
-        # calculate the loss for the value model
-        # this should be the difference between the predicted outcome and the actual outcome
-        # the actual outcome is 1 if player 1 wins, -1 if player 2 wins, and 0 if it's a draw
+        if avg_batch_value_loss.requires_grad:
+            avg_batch_value_loss.backward()
+        else:
+            print(f"Warning: Batch {i + 1} Value loss has no grad.")
 
-        # calculate loss for player 1
-        """
-        How this calculation should look like if using loops:
-        loss = 0
-        for prediction in player_1_value_estimates:
-            loss+=math.abs(score(status, 1)-prediction)
-        """
-        discount = torch.exp(
-            torch.arange(
-                len(player_1_value_estimates), device=player_1_value_estimates.device
-            )
-            * -discount_factor
-        )
-        losses_1 = (
-            torch.abs(
-                torch.full_like(player_1_value_estimates, _score(status, 1))
-                - player_1_value_estimates
-            )
-            * discount
-        ).sum()
-        losses_2 = (
-            torch.abs(
-                torch.full_like(player_2_value_estimates, _score(status, 2))
-                - player_2_value_estimates
-            )
-            * discount[: len(player_2_value_estimates)]
-        ).sum()
-        loss = losses_1 + losses_2
+        # Clip gradients
+        torch.nn.utils.clip_grad_norm_(policy_model.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(value_model.parameters(), max_norm=1.0)
 
-        # Track running loss
-        running_loss += loss.item()
-        iteration_count += 1
-
-        # Only log after we have at least 100 iterations worth of data
-        if iteration_count >= 100 and i % 100 == 0:
-            print(f"Average loss for the value model: {running_loss / iteration_count}")
-
-            safe_log_to_wandb(
-                {
-                    "loss_value_model": running_loss / iteration_count,
-                }
-            )
-
-            running_loss = 0.0  # Reset running loss
-            iteration_count = 0  # Reset iteration count
-
-        loss.backward()
+        # Step optimizers
+        optimizer_policy.step()
         optimizer_value.step()
+
+        # --- Logging ---
+        running_policy_loss += avg_batch_policy_loss.item()
+        running_value_loss += avg_batch_value_loss.item()
+        running_entropy += batch_entropy_sum / batch_games
+
+        if (i + 1) % log_interval == 0:
+            avg_policy_loss = running_policy_loss / log_interval
+            avg_value_loss = running_value_loss / log_interval
+            avg_entropy_log = running_entropy / log_interval
+
+            print(f"\nBatch {i + 1}/{iterations} (Total Games: {total_games_played})")
+            print(
+                f"  Avg Value Loss (last {log_interval} batches): {avg_value_loss:.4f}"
+            )
+            print(
+                f"  Avg Policy Loss (last {log_interval} batches): {avg_policy_loss:.4f}"
+            )
+            print(
+                f"  Avg Policy Entropy (last {log_interval} batches): {avg_entropy_log:.4f}"
+            )
+
+            # Prepare log data dictionary
+            log_data = {
+                "batch_value_loss": avg_value_loss,
+                "batch_policy_loss": avg_policy_loss,
+                "batch_policy_entropy": avg_entropy_log,
+                "total_games_played": total_games_played,
+            }
+
+            # Log the image of the last board state from the batch
+            if last_final_board_state is not None and wandb.run is not None:
+                board_image_np = create_board_image(last_final_board_state)
+                log_data["final_board_state"] = wandb.Image(
+                    board_image_np, caption=f"Final Board - Batch {i + 1}"
+                )
+                last_final_board_state = None
+
+            safe_log_to_wandb(log_data, step=i + 1)
+
+            # Reset running metrics for the next interval
+            running_value_loss = 0.0
+            running_policy_loss = 0.0
+            running_entropy = 0.0
 
 
 def _score(status: int, player: int) -> int:

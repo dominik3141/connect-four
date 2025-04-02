@@ -58,41 +58,68 @@ def get_next_model_move(
     board: ConnectFour,
     temperature: float = 1.0,
     epsilon: float = 0,  # epsilon-greedy parameter
-) -> Tuple[Move, Tensor]:
+) -> Tuple[Move, Tensor, Tensor]:
     """
-    Return the move and the probability of the move, ensuring only legal moves are selected.
+    Return the move, the probability of the move, and the policy distribution's entropy,
+    ensuring only legal moves are selected.
     """
-    while True:
-        state_tensor = torch.Tensor(board.state).view(1, 7 * 6).float()
-        logits = model(state_tensor)
+    # The loop for retrying illegal moves due to epsilon-greedy needs adjustment
+    # Let's calculate probs once and only sample/retry if needed
 
-        # Create a mask for legal moves, explicitly converting to int
-        legal_moves = torch.Tensor([int(is_legal(board, move)) for move in range(7)])
+    state_tensor = board_to_tensor(board).view(1, 7 * 6).float()
 
-        # Set logits of illegal moves to a large negative number
-        masked_logits = torch.where(legal_moves == 1, logits, torch.tensor(-1e9))
+    logits = model(state_tensor)
 
-        # add some noise to the logits
-        if temperature != 1.0:
-            masked_logits = masked_logits / temperature
+    # Create a mask for legal moves
+    legal_moves_mask = torch.tensor(
+        [is_legal(board, move) for move in range(7)], dtype=torch.bool
+    )
 
-        probs = F.softmax(masked_logits, dim=-1).view(-1)
+    # If no legal moves, something is wrong (shouldn't happen in Connect 4 unless board full)
+    if not legal_moves_mask.any():
+        # Handle this case, maybe raise error or return a special value
+        # For now, let's pretend it doesn't happen in a valid game state
+        # However, returning dummy values to avoid crashing
+        print("Error: No legal moves found!")
+        return 0, torch.tensor(0.0), torch.tensor(0.0)
 
-        distribution = Categorical(probs)
+    # Set logits of illegal moves to a large negative number
+    masked_logits = torch.where(legal_moves_mask, logits, torch.tensor(-float("inf")))
 
-        # choose a random move with probability epsilon
-        if random.random() < epsilon:
-            move = random.randint(0, 6)
-        else:
-            move = distribution.sample()
+    # Apply temperature scaling
+    if temperature != 1.0 and temperature > 0:
+        masked_logits = masked_logits / temperature
+    elif temperature <= 0:
+        print("Warning: Temperature is non-positive, using 1.0")
 
-        # make sure the move is legal, if not, try again
-        if not is_legal(board, move):
-            continue
+    # Calculate probabilities for legal moves
+    probs = F.softmax(masked_logits, dim=-1).view(-1)
 
+    # Create distribution only over legal moves if necessary, or handle sampling carefully
+    distribution = Categorical(probs=probs)
+
+    # Calculate entropy before potential epsilon-greedy move
+    entropy = distribution.entropy()
+
+    # Epsilon-greedy action selection
+    if random.random() < epsilon:
+        # Choose a random *legal* move
+        legal_indices = torch.where(legal_moves_mask)[0]
+        # Check if legal_indices is empty (should be handled above)
+        if len(legal_indices) == 0:
+            # This case should ideally be unreachable if the check above works
+            print("Error: No legal moves for random choice!")
+            return 0, torch.tensor(0.0), torch.tensor(0.0)
+        move_idx = random.choice(legal_indices).item()
+        move = Move(move_idx)
+        probability = probs[move]
+    else:
+        # Sample from the distribution
+        move_tensor = distribution.sample()
+        move = Move(move_tensor.item())
         probability = probs[move]
 
-        return move, probability
+    return move, probability, entropy
 
 
 class ValueModel(nn.Module):
@@ -106,6 +133,8 @@ class ValueModel(nn.Module):
         super(ValueModel, self).__init__()
         self.lin = nn.Sequential(
             nn.Linear(7 * 6 * 2 + 1, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
             nn.ReLU(),
             nn.Linear(256, 256),
             nn.ReLU(),
@@ -135,3 +164,10 @@ class ValueModel(nn.Module):
             return 1.0 - p1_win_prob
         else:  # player == 1
             return p1_win_prob
+
+
+def board_to_tensor(board: ConnectFour) -> Tensor:
+    """Convert a ConnectFour board to a tensor representation consistent with model expectations."""
+    tensor = torch.from_numpy(board.state).float()
+    tensor = tensor.t()  # transpose to get 7x6
+    return tensor.contiguous()

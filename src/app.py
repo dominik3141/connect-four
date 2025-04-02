@@ -81,7 +81,7 @@ def player_move():
             if opponent == "minimax":
                 ai_move = minimax_move(game, player=2, depth=depth)
             else:
-                ai_move, _ = get_next_model_move(policy_model, game)
+                ai_move, _, _ = get_next_model_move(policy_model, game)
             game = make_move(game, 2, ai_move)  # AI is player 2
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
