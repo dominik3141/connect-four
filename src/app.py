@@ -17,17 +17,17 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Initialize the model
-model = DecisionModel()
-model_path = "model.pth"
+# Initialize the policy model
+policy_model = DecisionModel()
+model_path = "policy_model.pth"
 
-# Load the trained model if available
+# Load the trained policy model if available
 if os.path.exists(model_path):
-    model.load_state_dict(torch.load(model_path))
-    model.eval()
+    policy_model.load_state_dict(torch.load(model_path))
+    policy_model.eval()
 else:
     # fail if no trained model is found
-    raise Exception("No trained model found, training model...")
+    raise Exception("No trained policy model found at policy_model.pth")
 
 
 def deserialize_board(board_state: List[List[int]]) -> ConnectFour:
@@ -81,7 +81,7 @@ def player_move():
             if opponent == "minimax":
                 ai_move = minimax_move(game, player=2, depth=depth)
             else:
-                ai_move, _ = get_next_model_move(model, game)
+                ai_move, _ = get_next_model_move(policy_model, game)
             game = make_move(game, 2, ai_move)  # AI is player 2
         except ValueError as e:
             return jsonify({"error": str(e)}), 400

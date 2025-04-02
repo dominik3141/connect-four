@@ -93,3 +93,45 @@ def get_next_model_move(
         probability = probs[move]
 
         return move, probability
+
+
+class ValueModel(nn.Module):
+    """
+    A model that takes a board state and a player (1 or 2) and returns that player's probability of winning.
+    Output is between 0 and 1, where values closer to 1 indicate a higher probability
+    of the specified player winning the game. It always evaluates from Player 1's perspective internally.
+    """
+
+    def __init__(self):
+        super(ValueModel, self).__init__()
+        self.lin = nn.Sequential(
+            nn.Linear(7 * 6 * 2 + 1, 256),
+            nn.ReLU(),
+            nn.Linear(256, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1),
+            nn.Sigmoid(),  # Output probability between 0 and 1 (for player 1)
+        )
+
+    def forward(self, x: torch.Tensor, player: int) -> torch.Tensor:
+        # Convert input to shape (batch_size, 7, 6)
+        original_x = x.view(-1, 7, 6)
+
+        # Create separate binary planes for each player, always from P1's perspective
+        player1_board = (original_x == 1).float().view(-1, 7 * 6)
+        player2_board = (original_x == 2).float().view(-1, 7 * 6)
+        processed_x = torch.cat([player1_board, player2_board], dim=-1)
+
+        # Add next player information (who is next on the original board)
+        # Note: 'who_is_next' expects the concatenated board representation
+        next_player = who_is_next(processed_x)
+        processed_x = torch.cat([processed_x, next_player.unsqueeze(1)], dim=-1)
+
+        # Calculate the probability of player 1 winning
+        p1_win_prob = self.lin(processed_x)
+
+        # If the requested player is player 2, return 1 - p1_win_prob
+        if player == 2:
+            return 1.0 - p1_win_prob
+        else:  # player == 1
+            return p1_win_prob

@@ -9,11 +9,8 @@ import random
 #   1 (player 1)
 #   2 (player 2)
 class ConnectFour:
-    def __init__(self, state: np.ndarray = None):
-        """
-        Initialize the ConnectFour board.
-        If no state is provided, initialize an empty board.
-        """
+    def __init__(self, state: np.ndarray | None = None):
+        """Initialize the ConnectFour board with an optional starting state"""
         if state is None:
             self.state = np.zeros((6, 7), dtype=int)
         else:
@@ -70,44 +67,31 @@ def random_move(board: ConnectFour) -> Move:
 
 
 def is_in_terminal_state(board: ConnectFour) -> int:
-    """
-    Returns the winning player's number if the game is in a terminal state,
-    or 3 if the game is a stalemate,
-    or 0 if the game is not in a terminal state.
-    """
+    """Returns the winning player number (1,2), 3 for stalemate, or 0 if game continues"""
+    state = board.state
+
     for player in [1, 2]:
-        # Check horizontal
-        for row in range(6):
-            for col in range(4):
-                if np.all(board.state[row, col : col + 4] == player):
-                    return player
+        # Horizontal
+        mask = state == player
+        horiz = mask[:, :-3] & mask[:, 1:-2] & mask[:, 2:-1] & mask[:, 3:]
+        if horiz.any():
+            return player
 
-        # Check vertical
-        for row in range(3):
-            for col in range(7):
-                if np.all(board.state[row : row + 4, col] == player):
-                    return player
+        # Vertical
+        vert = mask[:-3, :] & mask[1:-2, :] & mask[2:-1, :] & mask[3:, :]
+        if vert.any():
+            return player
 
-        # Check diagonal (positive slope)
+        # Diagonals
         for row in range(3):
             for col in range(4):
-                if np.all(
-                    np.array([board.state[row + i, col + i] for i in range(4)])
-                    == player
+                # Positive slope
+                if all(state[row + i, col + i] == player for i in range(4)):
+                    return player
+                # Negative slope
+                if row >= 3 and all(
+                    state[row - i, col + i] == player for i in range(4)
                 ):
                     return player
 
-        # Check diagonal (negative slope)
-        for row in range(3, 6):
-            for col in range(4):
-                if np.all(
-                    np.array([board.state[row - i, col + i] for i in range(4)])
-                    == player
-                ):
-                    return player
-
-    # Check for stalemate
-    if not np.any(board.state[0] == 0):
-        return 3  # Stalemate
-
-    return 0  # No terminal state
+    return 3 if not np.any(state[0] == 0) else 0
