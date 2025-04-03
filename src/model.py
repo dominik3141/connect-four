@@ -16,7 +16,11 @@ class DecisionModel(nn.Module):
     def __init__(self):
         super(DecisionModel, self).__init__()
         self.lin = nn.Sequential(
-            nn.Linear(7 * 6 * 2 + 1, 128),
+            nn.Linear(7 * 6 * 2 + 1, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -122,20 +126,23 @@ def get_next_model_move(
 
 class ValueModel(nn.Module):
     """
-    A model that takes a board state and a player (1 or 2) and returns that player's probability of winning.
-    Output is between 0 and 1, where values closer to 1 indicate a higher probability
-    of the specified player winning the game. It always evaluates from Player 1's perspective internally.
+    A model that takes a board state and a player (1 or 2) and returns that player's expected value
+    for the game outcome, using rewards {Win: 1, Draw: 0.5, Loss: -1}.
+    It always evaluates from Player 1's perspective internally and adjusts the sign for Player 2.
     """
 
     def __init__(self):
         super(ValueModel, self).__init__()
         self.lin = nn.Sequential(
-            nn.Linear(7 * 6 * 2 + 1, 128),
+            nn.Linear(7 * 6 * 2 + 1, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
-            nn.Sigmoid(),  # Output probability between 0 and 1 (for player 1)
         )
 
     def forward(self, x: torch.Tensor, player: int) -> torch.Tensor:
@@ -152,14 +159,14 @@ class ValueModel(nn.Module):
         next_player = who_is_next(processed_x)
         processed_x = torch.cat([processed_x, next_player.unsqueeze(1)], dim=-1)
 
-        # Calculate the probability of player 1 winning
-        p1_win_prob = self.lin(processed_x)
+        # Calculate the expected value for player 1
+        p1_value = self.lin(processed_x)
 
-        # If the requested player is player 2, return 1 - p1_win_prob
+        # If the requested player is player 2, return -p1_value (assuming near zero-sum)
         if player == 2:
-            return 1.0 - p1_win_prob
+            return -p1_value
         else:  # player == 1
-            return p1_win_prob
+            return p1_value
 
 
 def board_to_tensor(board: ConnectFour) -> Tensor:

@@ -40,20 +40,21 @@ def play_against_self(
 ) -> Tuple[Tensor, Tensor, int, float, ConnectFour, List[Tensor]]:
     """
     Plays a game where the online model plays against a frozen version of itself.
-    One player uses the online models, the other uses the frozen models.
-    The online value model provides V(S_t) for the online player.
-    The frozen value model provides V(S_t+1) for calculating the TD target.
     Losses (policy and value) are calculated *only* for the steps taken by the online player.
+    Value estimates for logging are collected for *all* steps using the online model,
+    always evaluated from the perspective of the player designated as 'online' for this game.
 
     Returns the total policy loss (for online player), total value loss (for online player),
     game outcome, average policy entropy (for online player), the final board state,
-    and a list of value estimates made by the online player.
+    and a list of value estimates made by the online model (from the online player's perspective)
+    for *every* state encountered.
     """
     board = ConnectFour()
     online_policy_loss_terms: List[Tensor] = []
     online_value_loss_terms: List[Tensor] = []
     online_entropies: List[float] = []
-    online_value_estimates_game: List[Tensor] = []
+    # This list stores estimates from ALL turns, always from the online player's perspective.
+    online_perspective_value_estimates_game: List[Tensor] = []
     final_board = board
 
     # Randomly assign online/frozen models to players 1 and 2
@@ -65,20 +66,30 @@ def play_against_self(
         board_tensor = board_to_tensor(final_board)
         is_online_turn = current_player == online_player_id
 
+        # --- Calculate Value Estimate for Logging (Every Turn, Online Perspective) ---
+        # Use the ONLINE value model to estimate the value for the ONLINE player,
+        # regardless of whose actual turn it is. Detach for logging.
+        value_estimate_for_log = online_value_model(
+            board_tensor,
+            online_player_id,  # <<< Use online_player_id here
+        ).detach()
+        online_perspective_value_estimates_game.append(value_estimate_for_log)
+
         # --- Determine Acting Models ---
         acting_policy_model = (
             online_policy_model if is_online_turn else frozen_policy_model
         )
-        # We only need the online value estimate for the current state IF it's the online player's turn
-        # because value loss is calculated based on the state *before* the online player's move.
+
+        # --- Value Estimate for Loss Calculation (Only Online Turn, Current Player Perspective) ---
+        # This MUST be from the perspective of the current_player when it's the online turn,
+        # because the TD target is calculated relative to this player's action.
         online_value_estimate_t: Optional[Tensor] = None
         if is_online_turn:
+            # This calculation needs gradients for the backward pass.
+            # It correctly uses current_player (which equals online_player_id in this block).
             online_value_estimate_t = online_value_model(board_tensor, current_player)
-            online_value_estimates_game.append(online_value_estimate_t.detach())
 
         # --- Select and Execute Move ---
-        # Use exploration parameters regardless of who is moving for now,
-        # could refine later to only explore for online player if desired.
         move, prob, entropy = get_next_model_move(
             acting_policy_model,
             final_board,
@@ -90,40 +101,29 @@ def play_against_self(
         next_board_tensor = board_to_tensor(next_board)
         status = is_in_terminal_state(next_board)
 
-        # --- Calculate Target Value (TD Target) ---
-        # This target is used for both value loss and policy advantage calculation *if* it was the online player's turn.
-        # We always use the FROZEN value network for the next state value V(S_t+1).
-        td_target = (
-            torch.zeros_like(online_value_estimate_t) if is_online_turn else None
-        )  # Initialize only if needed
-
-        if status != 0:  # Game ended
-            # Determine reward based on the perspective of the player who just moved (current_player)
-            if status == current_player:
-                reward = 1.0  # Player P won
-            elif status == 3:
-                reward = 0.5  # Draw
-            else:
-                reward = 0.0  # Player P lost (opponent O won)
-
-            if is_online_turn and td_target is not None:
+        # --- Calculate Target Value (TD Target for Online Player's Move) ---
+        # Target is only needed if it was the online player's turn.
+        td_target: Optional[Tensor] = None
+        if is_online_turn and online_value_estimate_t is not None:
+            if status != 0:  # Game ended
+                # Reward calculation remains the same (outcome for the player who just moved)
+                if status == current_player:
+                    reward = 1.0
+                elif status == 3:
+                    reward = 0.0
+                else:
+                    reward = -1.0
                 td_target = torch.tensor(
                     [[reward]], device=online_value_estimate_t.device
-                )  # Use device from online estimate
-
-        else:  # Game continues
-            # Estimate opponent's value in the next state V(S_t+1, O) using the FROZEN value network.
-            next_player = 3 - current_player  # Opponent (O)
-            with torch.no_grad():  # No gradients through the frozen network
-                # Get V_frozen(S_t+1, O)
-                frozen_next_value_opp = frozen_value_model(
-                    next_board_tensor, next_player
                 )
-
-            # Target for V_online(S_t, P) is gamma * (1 - V_frozen(S_t+1, O))
-            # Reward R_t+1 is 0 since the reward is only received at the terminal state in this setup.
-            if is_online_turn and td_target is not None:
-                td_target = discount_factor * (1.0 - frozen_next_value_opp)
+            else:  # Game continues
+                next_player = 3 - current_player  # Opponent
+                with torch.no_grad():
+                    frozen_next_value_opp = frozen_value_model(
+                        next_board_tensor, next_player
+                    )
+                # Target V(S_t, P) = gamma * (-V_frozen(S_{t+1}, O)) still holds
+                td_target = discount_factor * (-frozen_next_value_opp)
 
         # --- Calculate Losses (Only if Online Player Moved) ---
         if (
@@ -131,31 +131,26 @@ def play_against_self(
             and online_value_estimate_t is not None
             and td_target is not None
         ):
-            # Value Loss: (V_online(S_t) - TD_Target)^2
+            # Value Loss uses the estimate calculated for the current (online) player
             value_loss_term = F.mse_loss(online_value_estimate_t, td_target)
             online_value_loss_terms.append(value_loss_term)
 
-            # Policy Loss: -log_prob * Advantage - entropy_coeff * entropy
-            advantage = (
-                td_target - online_value_estimate_t
-            ).detach()  # TD Error = Target - V(S_t)
+            # Policy Loss Advantage also uses the estimate for the current (online) player
+            advantage = (td_target - online_value_estimate_t).detach()
             epsilon_log = 1e-9
             log_prob = torch.log(prob + epsilon_log)
             policy_loss_term = -log_prob * advantage - entropy_coefficient * entropy
             online_policy_loss_terms.append(policy_loss_term)
 
-            # Store entropy for the online player's move
             online_entropies.append(entropy.item())
 
         # --- Update State and Player ---
         final_board = next_board
-
         if status != 0:
-            break  # Game ended
-
+            break
         current_player = 3 - current_player
 
-    # Sum the losses accumulated *only* during the online player's turns
+    # --- Sum Losses ---
     total_policy_loss = (
         torch.stack(online_policy_loss_terms).sum()
         if online_policy_loss_terms
@@ -167,19 +162,19 @@ def play_against_self(
         else torch.tensor(0.0)
     )
 
-    # Calculate average entropy for the online player's moves
+    # --- Calculate Avg Entropy ---
     avg_online_entropy = (
         sum(online_entropies) / len(online_entropies) if online_entropies else 0.0
     )
 
-    # Return final status (perspective doesn't matter here), avg online entropy, board, and value estimates
+    # Return the list containing estimates from the online player's perspective for all states
     return (
         total_policy_loss,
         total_value_loss,
         status,
         avg_online_entropy,
         final_board,
-        online_value_estimates_game,
+        online_perspective_value_estimates_game,  # <<< Return the new list
     )
 
 
@@ -386,7 +381,8 @@ def train_using_self_play(
     running_value_loss = 0.0
     running_policy_loss = 0.0
     running_entropy = 0.0
-    running_online_value_predictions: List[float] = []
+    # This list collects estimates from the online player's perspective for all turns.
+    running_online_perspective_values: List[float] = []
     total_games_played = 0
     last_final_board_state: Optional[np.ndarray] = None
 
@@ -404,7 +400,8 @@ def train_using_self_play(
         batch_value_loss = torch.tensor(0.0, requires_grad=True)
         batch_entropy_sum = 0.0
         batch_games = 0
-        batch_last_game_online_values: Optional[List[float]] = None
+        # Store online-perspective values from the last game for the plot
+        batch_last_game_online_perspective_values: Optional[List[float]] = None
 
         # --- Play Batch (Online vs Frozen) ---
         for game_idx in range(batch_size):
@@ -414,7 +411,8 @@ def train_using_self_play(
                 status,
                 avg_entropy,
                 final_board,
-                online_value_estimates,
+                # Receive the list containing online-perspective estimates from all turns
+                online_perspective_estimates,
             ) = play_against_self(
                 online_policy_model=policy_model,
                 online_value_model=value_model,
@@ -432,12 +430,18 @@ def train_using_self_play(
             batch_games += 1
             total_games_played += 1
 
-            game_online_values = [v.item() for v in online_value_estimates]
-            running_online_value_predictions.extend(game_online_values)
+            # Collect online-perspective estimates from all turns
+            game_online_perspective_values = [
+                v.item() for v in online_perspective_estimates
+            ]
+            running_online_perspective_values.extend(game_online_perspective_values)
 
             if game_idx == batch_size - 1:
                 last_final_board_state = final_board.state.copy()
-                batch_last_game_online_values = game_online_values
+                # Store values from the last game for the plot
+                batch_last_game_online_perspective_values = (
+                    game_online_perspective_values
+                )
 
         if batch_games == 0:
             print(f"Warning: Batch {i + 1} completed with 0 games.")
@@ -520,71 +524,84 @@ def train_using_self_play(
 
             value_std_dev = 0.0
             value_histogram = None
-            if running_online_value_predictions:
+            # Use the list containing online-perspective estimates for histogram and std dev
+            if running_online_perspective_values:
                 value_std_dev = (
-                    torch.tensor(running_online_value_predictions).std().item()
+                    torch.tensor(running_online_perspective_values).std().item()
                 )
                 if wandb.run is not None:
-                    value_histogram = wandb.Histogram(running_online_value_predictions)
+                    # Histogram reflects online player's perspective on ALL states visited
+                    value_histogram = wandb.Histogram(running_online_perspective_values)
 
             print(f"\nBatch {i + 1}/{iterations} (Total Games: {total_games_played})")
             print(
-                f"  Avg Value Loss (Online, last {log_interval} batches): {avg_value_loss:.4f}"
-            )
+                f"  Avg Value Loss (Online Moves, last {log_interval} batches): {avg_value_loss:.4f}"
+            )  # Clarified Value Loss source
             print(
-                f"  Avg Policy Loss (Online, last {log_interval} batches): {avg_policy_loss:.4f}"
-            )
+                f"  Avg Policy Loss (Online Moves, last {log_interval} batches): {avg_policy_loss:.4f}"
+            )  # Clarified Policy Loss source
             print(
-                f"  Avg Policy Entropy (Online, last {log_interval} batches): {avg_entropy_log:.4f}"
-            )
+                f"  Avg Policy Entropy (Online Moves, last {log_interval} batches): {avg_entropy_log:.4f}"
+            )  # Clarified Entropy source
+            # Update print statement description
             print(
-                f"  Std Dev Value Pred (Online, last {log_interval} batches): {value_std_dev:.4f}"
+                f"  Std Dev Value Pred (Online Perspective, All Turns, last {log_interval} batches): {value_std_dev:.4f}"
             )
 
             log_data = {
-                "training/batch_value_loss": avg_value_loss,
-                "training/batch_policy_loss": avg_policy_loss,
-                "training/batch_policy_entropy": avg_entropy_log,
-                "training/online_value_std_dev": value_std_dev,
+                "training/batch_value_loss": avg_value_loss,  # Loss calculated for online player's moves
+                "training/batch_policy_loss": avg_policy_loss,  # Loss calculated for online player's moves
+                "training/batch_policy_entropy": avg_entropy_log,  # Entropy calculated for online player's moves
+                # Update wandb key description
+                "training/online_perspective_value_std_dev": value_std_dev,
                 "training/total_games_played": total_games_played,
             }
 
             if value_histogram:
-                log_data["training/online_value_distribution"] = value_histogram
+                # Update wandb key description
+                log_data["training/online_perspective_value_distribution"] = (
+                    value_histogram
+                )
 
-            if batch_last_game_online_values and wandb.run is not None:
-                if len(batch_last_game_online_values) > 1:
-                    fig = None  # Initialize fig to None
+            # Use the list containing online-perspective values from the last game for the plot
+            if batch_last_game_online_perspective_values and wandb.run is not None:
+                if len(batch_last_game_online_perspective_values) > 1:
+                    fig = None
                     try:
-                        turns = list(range(len(batch_last_game_online_values)))
-                        values = batch_last_game_online_values
+                        turns = list(
+                            range(len(batch_last_game_online_perspective_values))
+                        )
+                        values = batch_last_game_online_perspective_values
 
                         fig, ax = plt.subplots(figsize=(6, 4))
                         ax.plot(turns, values, marker="o", linestyle="-")
-                        ax.set_xlabel("Online Turn Index")
-                        ax.set_ylabel("Predicted Value")
-                        ax.set_title(f"Last Game Value Progression (Batch {i + 1})")
-                        ax.set_ylim(-0.05, 1.05)
+                        ax.set_xlabel("Game Step Index")
+                        # Update axis label
+                        ax.set_ylabel("Predicted Value (Online Player Perspective)")
+                        # Update title
+                        ax.set_title(
+                            f"Last Game Value Progression (Online Persp.) - Batch {i + 1}"
+                        )
+                        ax.set_ylim(-1.05, 1.05)
                         ax.grid(True)
 
-                        # Log the figure object directly
+                        # Update wandb key description
                         log_data["training/last_game_value_progression_plot"] = fig
-                        # No need to save to buffer or use wandb.Image() here
-
-                        plt.close(fig)  # Still important to close the figure
+                        plt.close(fig)
 
                     except Exception as e:
                         print(f"Warning: Failed to create value progression plot: {e}")
-                        if fig:  # Ensure figure is closed even on error after creation
+                        if fig:
                             plt.close(fig)
 
+            # ... (logging final board remains the same) ...
             if last_final_board_state is not None and wandb.run is not None:
                 board_image_np = create_board_image(last_final_board_state)
                 log_data["training/final_online_vs_frozen_board"] = wandb.Image(
                     board_image_np,
                     caption=f"Final Online vs Frozen Board - Batch {i + 1}",
                 )
-                last_final_board_state = None
+                last_final_board_state = None  # Clear it after logging
 
             safe_log_to_wandb(log_data, step=i + 1)
 
@@ -592,4 +609,5 @@ def train_using_self_play(
             running_value_loss = 0.0
             running_policy_loss = 0.0
             running_entropy = 0.0
-            running_online_value_predictions = []
+            # Reset the list collecting online-perspective predictions
+            running_online_perspective_values = []
