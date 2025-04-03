@@ -71,27 +71,29 @@ def is_in_terminal_state(board: ConnectFour) -> int:
     state = board.state
 
     for player in [1, 2]:
-        # Horizontal
+        # Horizontal win detection
         mask = state == player
         horiz = mask[:, :-3] & mask[:, 1:-2] & mask[:, 2:-1] & mask[:, 3:]
         if horiz.any():
             return player
 
-        # Vertical
+        # Vertical win detection
         vert = mask[:-3, :] & mask[1:-2, :] & mask[2:-1, :] & mask[3:, :]
         if vert.any():
             return player
 
-        # Diagonals
+        # Positive slope diagonal (bottom-right) win
         for row in range(3):
             for col in range(4):
-                # Positive slope
                 if all(state[row + i, col + i] == player for i in range(4)):
                     return player
-                # Negative slope
-                if row >= 3 and all(
-                    state[row - i, col + i] == player for i in range(4)
-                ):
+
+        # Negative slope diagonal (top-right) win
+        for row in range(
+            3, 6
+        ):  # rows 3,4,5 (where a negative slope diagonal can start)
+            for col in range(4):
+                if all(state[row - i, col + i] == player for i in range(4)):
                     return player
 
     return 3 if not np.any(state[0] == 0) else 0

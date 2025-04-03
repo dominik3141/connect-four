@@ -8,3 +8,5 @@ notes.md
 policy_model.pth
 value_model.pth
 **/*.DS_Store
+online_policy_model.pth
+online_value_model.pth

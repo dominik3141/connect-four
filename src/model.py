@@ -16,13 +16,11 @@ class DecisionModel(nn.Module):
     def __init__(self):
         super(DecisionModel, self).__init__()
         self.lin = nn.Sequential(
-            nn.Linear(7 * 6 * 2 + 1, 256),
+            nn.Linear(7 * 6 * 2 + 1, 128),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, 7),
+            nn.Linear(64, 7),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -56,7 +54,7 @@ def who_is_next(board: torch.Tensor) -> torch.Tensor:
 def get_next_model_move(
     model: DecisionModel,
     board: ConnectFour,
-    temperature: float = 1.0,
+    temperature: float = 0.01,
     epsilon: float = 0,  # epsilon-greedy parameter
 ) -> Tuple[Move, Tensor, Tensor]:
     """
@@ -132,13 +130,11 @@ class ValueModel(nn.Module):
     def __init__(self):
         super(ValueModel, self).__init__()
         self.lin = nn.Sequential(
-            nn.Linear(7 * 6 * 2 + 1, 256),
+            nn.Linear(7 * 6 * 2 + 1, 128),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1),
+            nn.Linear(64, 1),
             nn.Sigmoid(),  # Output probability between 0 and 1 (for player 1)
         )
 
