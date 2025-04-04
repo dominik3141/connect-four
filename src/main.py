@@ -16,11 +16,14 @@ if __name__ == "__main__":
         "iterations": 1000000,  # Number of BATCHES to run
         "batch_size": 64,  # Games per batch
         "log_interval": 10,  # Log metrics every N batches
-        "learning_rate": 0.001,  # LR might need adjustment with batching
-        "temperature": 1.0,  # Temperature for softmax exploration (CONSTANT)
-        "epsilon": 0.2,  # Epsilon-greedy exploration (CONSTANT)
-        "discount_factor": 0.99,  # Discount factor for value estimates
-        "entropy_coefficient": 0.0005,  # Coefficient for entropy regularization bonus
+        "learning_rate": 0.0001,  # LR might need adjustment with batching
+        # --- Reverted to Constant Exploration --- #
+        "temperature": 2.0,  # Low temperature for near-greedy play
+        "epsilon": 0.1,  # No epsilon-greedy exploration
+        # -------------------------------------- #
+        "discount_factor": 0.95,  # Discount factor for value estimates
+        "entropy_coefficient": 0.00,  # Coefficient for entropy regularization bonus (set to 0 to disable)
+        # --- Training Infrastructure ---
         "load_model": False,  # Load pre-existing model weights (loads into ONLINE, then copies to TARGET)
         "save_model": True,  # Save model weights during/after training
         "use_wandb": True,  # Use Weights & Biases for logging
@@ -28,10 +31,12 @@ if __name__ == "__main__":
         "value_model_path": "value_model.pth",  # Path for TARGET value model
         "online_policy_model_path": "online_policy_model.pth",  # Path for ONLINE policy model
         "online_value_model_path": "online_value_model.pth",  # Path for ONLINE value model
+        # --- Evaluation & Target Update ---
         "target_update_freq": 30,  # Update target networks every N batches
         "eval_games": 100,  # Games per evaluation playoff vs target
         "win_rate_threshold": 0.55,  # Online must win >55% vs target to update
-        "stacker_eval_games": 20,  # <<< Add: Games for stacker evaluation
+        "stacker_eval_games": 100,  # Games for stacker evaluation
+        "force_replace_model": True,  # Always replace frozen model if True
     }
 
     # Initialize the online models
@@ -148,14 +153,17 @@ if __name__ == "__main__":
             batch_size=hyperparams["batch_size"],
             log_interval=hyperparams["log_interval"],
             learning_rate=hyperparams["learning_rate"],
-            temperature=hyperparams["temperature"],  # <<< Pass constant temp
-            epsilon=hyperparams["epsilon"],  # <<< Pass constant eps
+            # --- Pass Constant Exploration Params --- #
+            temperature=hyperparams["temperature"],
+            epsilon=hyperparams["epsilon"],
+            # --- Pass Other Params --- #
             discount_factor=hyperparams["discount_factor"],
             entropy_coefficient=hyperparams["entropy_coefficient"],
             target_update_freq=hyperparams["target_update_freq"],
             eval_games=hyperparams["eval_games"],
             win_rate_threshold=hyperparams["win_rate_threshold"],
-            stacker_eval_games=hyperparams["stacker_eval_games"],  # <<< Pass arg
+            stacker_eval_games=hyperparams["stacker_eval_games"],
+            force_replace_model=hyperparams["force_replace_model"],
         )
     except KeyboardInterrupt:
         print("\nTraining interrupted by user (not Ctrl+C).")

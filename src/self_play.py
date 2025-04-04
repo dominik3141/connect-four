@@ -9,6 +9,8 @@ import wandb
 import numpy as np
 import random
 import matplotlib
+import io
+from PIL import Image
 
 matplotlib.use("Agg")  # Use non-interactive backend
 import matplotlib.pyplot as plt
@@ -37,17 +39,36 @@ def play_against_self(
     entropy_coefficient: float,
     temperature: float = 1.0,
     epsilon: float = 0,
-) -> Tuple[Tensor, Tensor, int, float, ConnectFour, List[Tensor]]:
+) -> Tuple[
+    Tensor,
+    Tensor,
+    int,
+    float,
+    ConnectFour,
+    List[Tensor],
+    int,
+    List[Tensor],
+    Optional[Tensor],
+    Optional[float],
+]:
     """
     Plays a game where the online model plays against a frozen version of itself.
     Losses (policy and value) are calculated *only* for the steps taken by the online player.
     Value estimates for logging are collected for *all* steps using the online model,
     always evaluated from the perspective of the player designated as 'online' for this game.
+    TD Target now uses the ONLINE value model for the next state value V(S_t+1).
 
-    Returns the total policy loss (for online player), total value loss (for online player),
-    game outcome, average policy entropy (for online player), the final board state,
-    and a list of value estimates made by the online model (from the online player's perspective)
-    for *every* state encountered.
+    Returns:
+        total policy loss (for online player),
+        total value loss (for online player),
+        game outcome status (1, 2, or 3),
+        average policy entropy (for online player),
+        the final board state,
+        a list of value estimates made by the online model (from the online player's perspective) for *every* state encountered,
+        the online player ID,
+        a list of advantage values calculated during the online player's turns,
+        Value prediction (Tensor) made by the online model for the online player for the state *before* the terminal state.
+        Final game outcome relative to the online player (+1 win, -1 loss, 0 draw).
     """
     board = ConnectFour()
     online_policy_loss_terms: List[Tensor] = []
@@ -55,11 +76,12 @@ def play_against_self(
     online_entropies: List[float] = []
     # This list stores estimates from ALL turns, always from the online player's perspective.
     online_perspective_value_estimates_game: List[Tensor] = []
+    online_advantages_game: List[Tensor] = []
     final_board = board
+    last_pred_before_terminal: Optional[Tensor] = None
+    final_relative_outcome: Optional[float] = None
 
-    # Randomly assign online/frozen models to players 1 and 2
     online_player_id = random.choice([1, 2])
-
     current_player = 1
 
     while True:
@@ -71,9 +93,11 @@ def play_against_self(
         # regardless of whose actual turn it is. Detach for logging.
         value_estimate_for_log = online_value_model(
             board_tensor,
-            online_player_id,  # <<< Use online_player_id here
+            online_player_id,
         ).detach()
         online_perspective_value_estimates_game.append(value_estimate_for_log)
+
+        last_pred_before_terminal = value_estimate_for_log
 
         # --- Determine Acting Models ---
         acting_policy_model = (
@@ -106,6 +130,8 @@ def play_against_self(
         td_target: Optional[Tensor] = None
         if is_online_turn and online_value_estimate_t is not None:
             if status != 0:  # Game ended
+                assert status in [1, 2, 3], f"Invalid terminal state: {status}"
+
                 # Reward calculation remains the same (outcome for the player who just moved)
                 if status == current_player:
                     reward = 1.0
@@ -118,14 +144,16 @@ def play_against_self(
                 )
             else:  # Game continues
                 next_player = 3 - current_player  # Opponent
-                with torch.no_grad():
-                    frozen_next_value_opp = frozen_value_model(
+                with (
+                    torch.no_grad()
+                ):  # Keep no_grad to prevent gradients through target path
+                    online_next_value_opp = online_value_model(
                         next_board_tensor, next_player
                     )
-                # Target V(S_t, P) = gamma * (-V_frozen(S_{t+1}, O)) still holds
-                td_target = discount_factor * (-frozen_next_value_opp)
+                # Target V(S_t, P) = gamma * (-V_online(S_{t+1}, O))
+                td_target = discount_factor * (-online_next_value_opp)
 
-        # --- Calculate Losses (Only if Online Player Moved) ---
+        # --- Calculate Losses and Advantage (Only if Online Player Moved) ---
         if (
             is_online_turn
             and online_value_estimate_t is not None
@@ -137,9 +165,11 @@ def play_against_self(
 
             # Policy Loss Advantage also uses the estimate for the current (online) player
             advantage = (td_target - online_value_estimate_t).detach()
+            online_advantages_game.append(advantage)
+
             epsilon_log = 1e-9
             log_prob = torch.log(prob + epsilon_log)
-            policy_loss_term = -log_prob * advantage - entropy_coefficient * entropy
+            policy_loss_term = -log_prob * advantage
             online_policy_loss_terms.append(policy_loss_term)
 
             online_entropies.append(entropy.item())
@@ -147,6 +177,12 @@ def play_against_self(
         # --- Update State and Player ---
         final_board = next_board
         if status != 0:
+            if status == online_player_id:
+                final_relative_outcome = 1.0
+            elif status == 3:
+                final_relative_outcome = 0.0
+            else:
+                final_relative_outcome = -1.0
             break
         current_player = 3 - current_player
 
@@ -167,14 +203,17 @@ def play_against_self(
         sum(online_entropies) / len(online_entropies) if online_entropies else 0.0
     )
 
-    # Return the list containing estimates from the online player's perspective for all states
     return (
         total_policy_loss,
         total_value_loss,
         status,
         avg_online_entropy,
         final_board,
-        online_perspective_value_estimates_game,  # <<< Return the new list
+        online_perspective_value_estimates_game,
+        online_player_id,
+        online_advantages_game,
+        last_pred_before_terminal,
+        final_relative_outcome,
     )
 
 
@@ -363,14 +402,17 @@ def train_using_self_play(
     batch_size: int = 32,
     log_interval: int = 10,
     learning_rate: float = 0.001,
+    # --- Constant Exploration Parameters ---
     temperature: float = 1.0,
     epsilon: float = 0.1,
+    # -------------------------------------
     discount_factor: float = 0.95,
     entropy_coefficient: float = 0.01,
     target_update_freq: int = 10,
     eval_games: int = 20,
     win_rate_threshold: float = 0.55,
     stacker_eval_games: int = 20,
+    force_replace_model: bool = False,
 ) -> None:
     optimizer_policy = torch.optim.Adam(policy_model.parameters(), lr=learning_rate)
     optimizer_value = torch.optim.Adam(value_model.parameters(), lr=learning_rate)
@@ -381,12 +423,15 @@ def train_using_self_play(
     running_value_loss = 0.0
     running_policy_loss = 0.0
     running_entropy = 0.0
-    # This list collects estimates from the online player's perspective for all turns.
     running_online_perspective_values: List[float] = []
+    running_advantages: List[float] = []
+    running_last_preds_before_terminal: List[float] = []
+    running_final_outcomes: List[float] = []
     total_games_played = 0
     last_final_board_state: Optional[np.ndarray] = None
 
     print(f"Starting training for {iterations} batches of size {batch_size}...")
+    print(f"Using Temperature: {temperature:.3f}, Epsilon: {epsilon:.3f}")
     print(f"Frozen networks evaluated every {target_update_freq} batches.")
     print(f"Frozen network updated if online model win rate > {win_rate_threshold:.1%}")
     print(f"Using entropy regularization coefficient: {entropy_coefficient}")
@@ -399,9 +444,13 @@ def train_using_self_play(
         batch_policy_loss = torch.tensor(0.0, requires_grad=True)
         batch_value_loss = torch.tensor(0.0, requires_grad=True)
         batch_entropy_sum = 0.0
+        batch_advantages: List[Tensor] = []
         batch_games = 0
-        # Store online-perspective values from the last game for the plot
+        batch_last_preds_before_terminal: List[Optional[Tensor]] = []
+        batch_final_outcomes: List[Optional[float]] = []
         batch_last_game_online_perspective_values: Optional[List[float]] = None
+        batch_last_game_status: Optional[int] = None
+        batch_last_game_online_player_id: Optional[int] = None
 
         # --- Play Batch (Online vs Frozen) ---
         for game_idx in range(batch_size):
@@ -409,10 +458,13 @@ def train_using_self_play(
                 total_policy_loss,
                 total_value_loss,
                 status,
-                avg_entropy,
+                avg_game_entropy,
                 final_board,
-                # Receive the list containing online-perspective estimates from all turns
                 online_perspective_estimates,
+                online_player_id,
+                game_advantages,
+                last_pred,
+                final_outcome,
             ) = play_against_self(
                 online_policy_model=policy_model,
                 online_value_model=value_model,
@@ -426,7 +478,8 @@ def train_using_self_play(
 
             batch_policy_loss = batch_policy_loss + total_policy_loss
             batch_value_loss = batch_value_loss + total_value_loss
-            batch_entropy_sum += avg_entropy
+            batch_entropy_sum = batch_entropy_sum + avg_game_entropy
+            batch_advantages.extend(game_advantages)
             batch_games += 1
             total_games_played += 1
 
@@ -442,22 +495,32 @@ def train_using_self_play(
                 batch_last_game_online_perspective_values = (
                     game_online_perspective_values
                 )
+                # Store status and online player ID from the last game
+                batch_last_game_status = status
+                batch_last_game_online_player_id = online_player_id
+
+            # --- Store prediction and outcome for accuracy ---
+            batch_last_preds_before_terminal.append(last_pred)
+            batch_final_outcomes.append(final_outcome)
 
         if batch_games == 0:
             print(f"Warning: Batch {i + 1} completed with 0 games.")
             continue
 
-        # --- Update Online Models ---
+        # --- Calculate average entropy for this batch ---
+        avg_batch_entropy = batch_entropy_sum / batch_games if batch_games > 0 else 0.0
+
         avg_batch_policy_loss = batch_policy_loss / batch_games
         avg_batch_value_loss = batch_value_loss / batch_games
 
         optimizer_policy.zero_grad()
         optimizer_value.zero_grad()
 
-        if avg_batch_policy_loss.requires_grad:
-            avg_batch_policy_loss.backward(retain_graph=False)
+        current_policy_loss_to_backprop = avg_batch_policy_loss
+        if current_policy_loss_to_backprop.requires_grad:
+            current_policy_loss_to_backprop.backward(retain_graph=False)
         else:
-            if avg_batch_policy_loss.item() != 0.0:
+            if current_policy_loss_to_backprop.item() != 0.0:
                 print(
                     f"Warning: Batch {i + 1} Policy loss is non-zero but has no grad."
                 )
@@ -499,28 +562,69 @@ def train_using_self_play(
                 )
             safe_log_to_wandb(stacker_log_data, step=i + 1)
 
-            if online_win_rate > win_rate_threshold:
+            # --- Update Frozen Networks based on Evaluation or Force Flag ---
+            update_frozen = False
+            update_reason = ""
+            if force_replace_model:
+                update_frozen = True
+                update_reason = "forced by flag"
+                print("Forcing update of frozen networks (force_replace_model=True).")
+            elif online_win_rate > win_rate_threshold:
+                update_frozen = True
+                update_reason = f"win rate {online_win_rate:.2%} > threshold {win_rate_threshold:.1%}"
                 print(
-                    f"Online model passed evaluation (Win Rate vs Frozen: {online_win_rate:.2%}). Updating frozen networks."
+                    f"Online model passed evaluation ({update_reason}). Updating frozen networks."
                 )
-                frozen_policy_model.load_state_dict(policy_model.state_dict())
-                frozen_value_model.load_state_dict(value_model.state_dict())
-                safe_log_to_wandb({"evaluation/frozen_network_updated": 1}, step=i + 1)
             else:
                 print(
                     f"Online model did not pass evaluation (Win Rate vs Frozen: {online_win_rate:.2%}). Frozen networks remain unchanged."
                 )
+
+            if update_frozen:
+                frozen_policy_model.load_state_dict(policy_model.state_dict())
+                frozen_value_model.load_state_dict(value_model.state_dict())
+                safe_log_to_wandb(
+                    {
+                        "evaluation/frozen_network_updated": 1,
+                        "evaluation/frozen_update_reason": update_reason,
+                    },
+                    step=i + 1,
+                )
+            else:
                 safe_log_to_wandb({"evaluation/frozen_network_updated": 0}, step=i + 1)
+            # ---------------------------------------------------------------
 
         # --- Logging ---
-        running_policy_loss += avg_batch_policy_loss.item()
+        running_policy_loss += current_policy_loss_to_backprop.item()
         running_value_loss += avg_batch_value_loss.item()
-        running_entropy += batch_entropy_sum / batch_games
+        running_entropy += avg_batch_entropy
+        running_advantages.extend([adv.item() for adv in batch_advantages])
+        # --- Accumulate data for accuracy metric ---
+        for pred, outcome in zip(
+            batch_last_preds_before_terminal, batch_final_outcomes
+        ):
+            if pred is not None and outcome is not None:
+                running_last_preds_before_terminal.append(pred.item())
+                running_final_outcomes.append(outcome)
+        # -----------------------------------------
 
         if (i + 1) % log_interval == 0:
             avg_policy_loss = running_policy_loss / log_interval
             avg_value_loss = running_value_loss / log_interval
             avg_entropy_log = running_entropy / log_interval
+
+            # --- Calculate Advantage Statistics ---
+            adv_mean = 0.0
+            adv_std = 0.0
+            adv_hist = None
+            if running_advantages:
+                adv_tensor = torch.tensor(running_advantages)
+                adv_mean = adv_tensor.mean().item()
+                adv_std = adv_tensor.std().item()
+                if wandb.run is not None:
+                    # Histogram reflects advantages calculated for online player's moves
+                    adv_hist = wandb.Histogram(adv_tensor)
+            # --- End Advantage Statistics ---
 
             value_std_dev = 0.0
             value_histogram = None
@@ -533,35 +637,72 @@ def train_using_self_play(
                     # Histogram reflects online player's perspective on ALL states visited
                     value_histogram = wandb.Histogram(running_online_perspective_values)
 
+            # --- Calculate Value Prediction Sign Accuracy ---
+            correct_sign_predictions = 0
+            total_sign_predictions = 0
+            value_sign_accuracy = 0.0
+            training_wins = 0
+            training_losses = 0
+            training_draws = 0
+            training_total_games = 0
+            training_win_rate = 0.0
+            if running_final_outcomes:
+                training_total_games = len(running_final_outcomes)
+                for pred, outcome in zip(
+                    running_last_preds_before_terminal, running_final_outcomes
+                ):
+                    if outcome != 0.0:
+                        total_sign_predictions += 1
+                        if pred * outcome > 0:
+                            correct_sign_predictions += 1
+                    if outcome == 1.0:
+                        training_wins += 1
+                    elif outcome == -1.0:
+                        training_losses += 1
+                    else:
+                        training_draws += 1
+                if total_sign_predictions > 0:
+                    value_sign_accuracy = (
+                        correct_sign_predictions / total_sign_predictions
+                    )
+                if training_total_games > 0:
+                    training_win_rate = training_wins / training_total_games
+
             print(f"\nBatch {i + 1}/{iterations} (Total Games: {total_games_played})")
+            print(f"  Avg Value Loss: {avg_value_loss:.4f}")
+            print(f"  Avg Policy Loss: {avg_policy_loss:.4f}")
+            print(f"  Avg Policy Entropy: {avg_entropy_log:.4f}")
+            print(f"  Avg Advantage: {adv_mean:.4f}")
+            print(f"  Std Dev Advantage: {adv_std:.4f}")
+            print(f"  Std Dev Value Pred: {value_std_dev:.4f}")
             print(
-                f"  Avg Value Loss (Online Moves, last {log_interval} batches): {avg_value_loss:.4f}"
-            )  # Clarified Value Loss source
+                f"  Last Value Sign Accuracy (vs Win/Loss): {value_sign_accuracy:.2%}"
+            )
             print(
-                f"  Avg Policy Loss (Online Moves, last {log_interval} batches): {avg_policy_loss:.4f}"
-            )  # Clarified Policy Loss source
+                f"  Training Win Rate (Online vs Frozen, last {log_interval * batch_size} games): {training_win_rate:.2%}"
+            )
             print(
-                f"  Avg Policy Entropy (Online Moves, last {log_interval} batches): {avg_entropy_log:.4f}"
-            )  # Clarified Entropy source
-            # Update print statement description
-            print(
-                f"  Std Dev Value Pred (Online Perspective, All Turns, last {log_interval} batches): {value_std_dev:.4f}"
+                f"     (W: {training_wins}, L: {training_losses}, D: {training_draws}) over {training_total_games} games"
             )
 
             log_data = {
-                "training/batch_value_loss": avg_value_loss,  # Loss calculated for online player's moves
-                "training/batch_policy_loss": avg_policy_loss,  # Loss calculated for online player's moves
-                "training/batch_policy_entropy": avg_entropy_log,  # Entropy calculated for online player's moves
-                # Update wandb key description
+                "training/batch_value_loss": avg_value_loss,
+                "training/batch_policy_loss": avg_policy_loss,
+                "training/batch_policy_entropy": avg_entropy_log,
                 "training/online_perspective_value_std_dev": value_std_dev,
                 "training/total_games_played": total_games_played,
+                "training/advantage_mean": adv_mean,
+                "training/advantage_std_dev": adv_std,
+                "training/value_last_sign_accuracy": value_sign_accuracy,
+                "training/online_vs_frozen_win_rate": training_win_rate,
             }
 
             if value_histogram:
-                # Update wandb key description
                 log_data["training/online_perspective_value_distribution"] = (
                     value_histogram
                 )
+            if adv_hist:
+                log_data["training/advantage_distribution"] = adv_hist
 
             # Use the list containing online-perspective values from the last game for the plot
             if batch_last_game_online_perspective_values and wandb.run is not None:
@@ -576,38 +717,57 @@ def train_using_self_play(
                         fig, ax = plt.subplots(figsize=(6, 4))
                         ax.plot(turns, values, marker="o", linestyle="-")
                         ax.set_xlabel("Game Step Index")
-                        # Update axis label
                         ax.set_ylabel("Predicted Value (Online Player Perspective)")
-                        # Update title
+                        outcome_str = "Outcome: Unknown"
+                        if (
+                            batch_last_game_status is not None
+                            and batch_last_game_online_player_id is not None
+                        ):
+                            if (
+                                batch_last_game_status
+                                == batch_last_game_online_player_id
+                            ):
+                                outcome_str = "Outcome: Online Player Won"
+                            elif batch_last_game_status == 3:
+                                outcome_str = "Outcome: Draw"
+                            else:
+                                outcome_str = "Outcome: Online Player Lost"
                         ax.set_title(
                             f"Last Game Value Progression (Online Persp.) - Batch {i + 1}"
                         )
                         ax.set_ylim(-1.05, 1.05)
                         ax.grid(True)
 
-                        # Update wandb key description
-                        log_data["training/last_game_value_progression_plot"] = fig
+                        buf = io.BytesIO()
+                        fig.savefig(buf, format="png")
+                        buf.seek(0)
+                        img = Image.open(buf)
+                        log_data["training/last_game_value_progression_plot"] = (
+                            wandb.Image(
+                                img,
+                                caption=outcome_str,
+                            )
+                        )
                         plt.close(fig)
+                        buf.close()
 
                     except Exception as e:
                         print(f"Warning: Failed to create value progression plot: {e}")
-                        if fig:
-                            plt.close(fig)
 
-            # ... (logging final board remains the same) ...
             if last_final_board_state is not None and wandb.run is not None:
                 board_image_np = create_board_image(last_final_board_state)
                 log_data["training/final_online_vs_frozen_board"] = wandb.Image(
                     board_image_np,
                     caption=f"Final Online vs Frozen Board - Batch {i + 1}",
                 )
-                last_final_board_state = None  # Clear it after logging
+                last_final_board_state = None
 
             safe_log_to_wandb(log_data, step=i + 1)
 
-            # Reset running metrics for the next interval
             running_value_loss = 0.0
             running_policy_loss = 0.0
             running_entropy = 0.0
-            # Reset the list collecting online-perspective predictions
             running_online_perspective_values = []
+            running_advantages = []
+            running_last_preds_before_terminal = []
+            running_final_outcomes = []

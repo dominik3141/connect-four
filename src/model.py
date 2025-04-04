@@ -16,15 +16,13 @@ class DecisionModel(nn.Module):
     def __init__(self):
         super(DecisionModel, self).__init__()
         self.lin = nn.Sequential(
-            nn.Linear(7 * 6 * 2 + 1, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
+            nn.Linear(7 * 6 * 2 + 1, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, 7),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, 7),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -112,7 +110,7 @@ def get_next_model_move(
             # This case should ideally be unreachable if the check above works
             print("Error: No legal moves for random choice!")
             return 0, torch.tensor(0.0), torch.tensor(0.0)
-        move_idx = random.choice(legal_indices).item()
+        move_idx = random.choice(legal_indices.tolist())
         move = Move(move_idx)
         probability = probs[move]
     else:
@@ -127,22 +125,21 @@ def get_next_model_move(
 class ValueModel(nn.Module):
     """
     A model that takes a board state and a player (1 or 2) and returns that player's expected value
-    for the game outcome, using rewards {Win: 1, Draw: 0.5, Loss: -1}.
+    for the game outcome, using rewards {Win: 1, Draw: 0, Loss: -1}. Output is bounded to [-1, 1] via tanh.
     It always evaluates from Player 1's perspective internally and adjusts the sign for Player 2.
     """
 
     def __init__(self):
         super(ValueModel, self).__init__()
         self.lin = nn.Sequential(
-            nn.Linear(7 * 6 * 2 + 1, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
+            nn.Linear(7 * 6 * 2 + 1, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, 1),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1),
+            nn.Tanh(),  # <<< Add Tanh activation here
         )
 
     def forward(self, x: torch.Tensor, player: int) -> torch.Tensor:
@@ -159,7 +156,7 @@ class ValueModel(nn.Module):
         next_player = who_is_next(processed_x)
         processed_x = torch.cat([processed_x, next_player.unsqueeze(1)], dim=-1)
 
-        # Calculate the expected value for player 1
+        # Calculate the expected value for player 1 (now bounded by tanh)
         p1_value = self.lin(processed_x)
 
         # If the requested player is player 2, return -p1_value (assuming near zero-sum)
