@@ -86,11 +86,25 @@ def get_next_model_move(
     # Set logits of illegal moves to a large negative number
     masked_logits = torch.where(legal_moves_mask, logits, torch.tensor(-float("inf")))
 
-    # Apply temperature scaling
-    if temperature != 1.0 and temperature > 0:
-        masked_logits = masked_logits / temperature
-    elif temperature <= 0:
-        print("Warning: Temperature is non-positive, using 1.0")
+    # Handle temperature
+    if temperature == 0:
+        # For temperature=0, use argmax (greedy) selection
+        # Find the legal move with highest logit value
+        greedy_move = torch.argmax(masked_logits).item()
+        move = Move(greedy_move)
+        # Create one-hot distribution for the selected move
+        probs = torch.zeros_like(masked_logits).squeeze()
+        probs[greedy_move] = 1.0
+        # Entropy of a deterministic distribution is 0
+        entropy = torch.tensor(0.0)
+        return move, probs[move], entropy
+    elif temperature > 0:
+        # Normal temperature scaling for positive values
+        if temperature != 1.0:
+            masked_logits = masked_logits / temperature
+    else:
+        # Handle negative temperature (should not happen, but just in case)
+        print("Warning: Temperature is negative, using 1.0")
 
     # Calculate probabilities for legal moves
     probs = F.softmax(masked_logits, dim=-1).view(-1)

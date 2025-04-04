@@ -37,8 +37,10 @@ def play_against_self(
     frozen_value_model: ValueModel,
     discount_factor: float,
     entropy_coefficient: float,
-    temperature: float = 1.0,
-    epsilon: float = 0,
+    online_temperature: float = 1.0,
+    online_epsilon: float = 0.1,
+    frozen_temperature: float = 0.1,
+    frozen_epsilon: float = 0.0,
 ) -> Tuple[
     Tensor,
     Tensor,
@@ -117,8 +119,8 @@ def play_against_self(
         move, prob, entropy = get_next_model_move(
             acting_policy_model,
             final_board,
-            temperature=temperature,
-            epsilon=epsilon,
+            temperature=online_temperature if is_online_turn else frozen_temperature,
+            epsilon=online_epsilon if is_online_turn else frozen_epsilon,
         )
 
         next_board = make_move(final_board, current_player, move)
@@ -402,9 +404,11 @@ def train_using_self_play(
     batch_size: int = 32,
     log_interval: int = 10,
     learning_rate: float = 0.001,
-    # --- Constant Exploration Parameters ---
-    temperature: float = 1.0,
-    epsilon: float = 0.1,
+    # --- Separate Exploration Parameters ---
+    online_temperature: float = 1.0,
+    online_epsilon: float = 0.1,
+    frozen_temperature: float = 0.1,
+    frozen_epsilon: float = 0.0,
     # -------------------------------------
     discount_factor: float = 0.95,
     entropy_coefficient: float = 0.01,
@@ -431,7 +435,7 @@ def train_using_self_play(
     last_final_board_state: Optional[np.ndarray] = None
 
     print(f"Starting training for {iterations} batches of size {batch_size}...")
-    print(f"Using Temperature: {temperature:.3f}, Epsilon: {epsilon:.3f}")
+    print(f"Using Temperature: {online_temperature:.3f}, Epsilon: {online_epsilon:.3f}")
     print(f"Frozen networks evaluated every {target_update_freq} batches.")
     print(f"Frozen network updated if online model win rate > {win_rate_threshold:.1%}")
     print(f"Using entropy regularization coefficient: {entropy_coefficient}")
@@ -472,8 +476,10 @@ def train_using_self_play(
                 frozen_value_model=frozen_value_model,
                 discount_factor=discount_factor,
                 entropy_coefficient=entropy_coefficient,
-                temperature=temperature,
-                epsilon=epsilon,
+                online_temperature=online_temperature,
+                online_epsilon=online_epsilon,
+                frozen_temperature=frozen_temperature,
+                frozen_epsilon=frozen_epsilon,
             )
 
             batch_policy_loss = batch_policy_loss + total_policy_loss
