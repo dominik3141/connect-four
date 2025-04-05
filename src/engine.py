@@ -32,16 +32,25 @@ def is_legal(board: ConnectFour, move: Move) -> bool:
 
 
 def make_move(board: ConnectFour, player: int, move: Move) -> ConnectFour:
+    """
+    Creates a *new* board state representing the board after the player makes the specified move.
+    Does not modify the original board.
+    """
     if not is_legal(board, move):
         raise ValueError("Illegal move")
 
+    # Create a copy of the current state to avoid modifying the original board
+    new_state = board.state.copy()
+
     # Find the lowest empty row in the chosen column
     for row in range(5, -1, -1):
-        if board.state[row, move] == 0:
-            board.state[row, move] = player
+        if new_state[row, move] == 0:
+            new_state[row, move] = player
             break
+    # If the loop finishes without break, the column was full, but is_legal should prevent this.
 
-    return board
+    # Return a new ConnectFour object with the new state
+    return ConnectFour(state=new_state)
 
 
 def random_move(board: ConnectFour) -> Move:
