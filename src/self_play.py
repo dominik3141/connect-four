@@ -1,17 +1,21 @@
-from model import ValueModel, get_next_value_based_move, board_to_tensor
-from engine import ConnectFour, make_move, is_in_terminal_state, is_legal, random_move
+from .model import ValueModel, get_next_value_based_move, board_to_tensor
+from .engine import ConnectFour, make_move, is_in_terminal_state, is_legal, random_move
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from typing import Tuple, List, Optional
-from utils import safe_log_to_wandb, create_board_image
+from typing import Tuple, List, Optional, TYPE_CHECKING
+from .utils import safe_log_to_wandb, create_board_image
 import wandb
 import numpy as np
 import random
 import matplotlib
 import io
 from PIL import Image
-import os  # Added import
+import os
+
+# Use TYPE_CHECKING to avoid circular import issues if wandb.sdk.wandb_run.Run is needed for type hint
+if TYPE_CHECKING:
+    from wandb.sdk.wandb_run import Run
 
 matplotlib.use("Agg")  # Use non-interactive backend
 import matplotlib.pyplot as plt
@@ -358,6 +362,7 @@ def train_using_self_play(
     win_rate_threshold: float = 0.55,
     stacker_eval_games: int = 20,
     force_replace_model: bool = False,
+    wandb_run: Optional["Run"] = None,
 ) -> None:
     optimizer_value = torch.optim.Adam(value_model.parameters(), lr=learning_rate)
 
@@ -371,6 +376,7 @@ def train_using_self_play(
     running_final_outcomes: List[float] = []
     total_games_played = 0
     last_final_board_state: Optional[np.ndarray] = None
+    archived_frozen_model_count = 0
 
     print(
         f"Starting training (Value-Based) for {iterations} batches of size {batch_size}..."
@@ -469,7 +475,9 @@ def train_using_self_play(
                 value_model, frozen_value_model, num_games=eval_games
             )
             safe_log_to_wandb(
-                {"evaluation/online_vs_frozen_win_rate": online_win_rate}, step=i + 1
+                {"evaluation/online_vs_frozen_win_rate": online_win_rate},
+                step=i + 1,
+                wandb_run=wandb_run,
             )
 
             stacker_win_rate, last_stacker_game_board = evaluate_vs_stacker(
@@ -479,13 +487,13 @@ def train_using_self_play(
             stacker_log_data = {
                 "evaluation/online_vs_stacker_win_rate": stacker_win_rate
             }
-            if last_stacker_game_board is not None and wandb.run is not None:
+            if last_stacker_game_board is not None and wandb_run is not None:
                 stacker_board_image_np = create_board_image(last_stacker_game_board)
                 stacker_log_data["evaluation/final_stacker_eval_board"] = wandb.Image(
                     stacker_board_image_np,
                     caption=f"Final Stacker Eval Board - Batch {i + 1}",
                 )
-            safe_log_to_wandb(stacker_log_data, step=i + 1)
+            safe_log_to_wandb(stacker_log_data, step=i + 1, wandb_run=wandb_run)
 
             update_frozen = False
             update_reason = ""
@@ -507,35 +515,74 @@ def train_using_self_play(
                 )
 
             if update_frozen:
-                # Archive the current frozen model before overwriting
-                if wandb.run is not None:
+                # Save the ONLINE model's state dict (which will become the new frozen model)
+                # Log it as a new version of the 'frozen_value_model' artifact
+                if wandb_run is not None:
                     try:
-                        archive_filename = (
-                            f"archived_frozen_value_model_batch_{i + 1}.pth"
-                        )
+                        # Define a temporary path for the state dict
+                        temp_model_path = f"temp_frozen_update_batch_{i + 1}.pth"
                         print(
-                            f"Archiving current frozen value model to {archive_filename} before update..."
+                            f"Preparing to update frozen model. Saving current online model state to {temp_model_path}..."
                         )
-                        torch.save(frozen_value_model.state_dict(), archive_filename)
-                        wandb.save(archive_filename)  # Uploads as artifact
-                        print(
-                            f"Archived frozen model saved to W&B Artifacts: {archive_filename}"
-                        )
-                        # Optionally remove the local file after upload if desired
-                        os.remove(archive_filename)
-                    except Exception as e:
-                        print(f"Warning: Failed to archive frozen model to W&B: {e}")
+                        torch.save(value_model.state_dict(), temp_model_path)
 
+                        # --- Log as new version of 'frozen_value_model' ---
+                        frozen_model_artifact = wandb.Artifact(
+                            "frozen_value_model",  # Consistent artifact name for versioning
+                            type="model",
+                            description=f"Updated frozen value model at batch {i + 1}. Replaced because: {update_reason}",
+                            metadata={
+                                "batch": i + 1,
+                                "update_reason": update_reason,
+                                "online_win_rate": online_win_rate,
+                            },
+                        )
+                        frozen_model_artifact.add_file(temp_model_path)
+                        wandb_run.log_artifact(
+                            frozen_model_artifact
+                        )  # Creates frozen_value_model:vX
+                        archived_frozen_model_count += (
+                            1  # Counter is now for versions of the main artifact
+                        )
+                        print(
+                            f"Logged new frozen model version: {frozen_model_artifact.name}:v{archived_frozen_model_count}"
+                        )
+                        # Remove the temporary file after logging
+                        os.remove(temp_model_path)
+                        # --- End Artifact Logging ---
+
+                    except Exception as e:
+                        print(
+                            f"Warning: Failed to log new version of frozen model artifact: {e}"
+                        )
+                        # Clean up temp file even if logging failed
+                        if os.path.exists(temp_model_path):
+                            try:
+                                os.remove(temp_model_path)
+                            except OSError as rm_err:
+                                print(
+                                    f"Warning: Failed to remove temporary model file {temp_model_path}: {rm_err}"
+                                )
+
+                # Load the online model's state into the frozen model instance
                 frozen_value_model.load_state_dict(value_model.state_dict())
+                # Log update success metric
                 safe_log_to_wandb(
                     {
                         "evaluation/frozen_network_updated": 1,
-                        "evaluation/frozen_update_reason": update_reason,
+                        "evaluation/frozen_update_reason_code": 1
+                        if force_replace_model
+                        else 2,
                     },
                     step=i + 1,
+                    wandb_run=wandb_run,
                 )
             else:
-                safe_log_to_wandb({"evaluation/frozen_network_updated": 0}, step=i + 1)
+                safe_log_to_wandb(
+                    {"evaluation/frozen_network_updated": 0},
+                    step=i + 1,
+                    wandb_run=wandb_run,
+                )
 
         running_value_loss += avg_batch_value_loss.item()
         running_value_entropy += avg_batch_value_entropy
@@ -558,7 +605,7 @@ def train_using_self_play(
                 adv_tensor = torch.tensor(running_advantages)
                 adv_mean = adv_tensor.mean().item()
                 adv_std = adv_tensor.std().item()
-                if wandb.run is not None:
+                if wandb_run is not None:
                     adv_hist = wandb.Histogram(adv_tensor)
 
             value_std_dev = 0.0
@@ -567,7 +614,7 @@ def train_using_self_play(
                 value_std_dev = (
                     torch.tensor(running_online_perspective_values).std().item()
                 )
-                if wandb.run is not None:
+                if wandb_run is not None:
                     value_histogram = wandb.Histogram(running_online_perspective_values)
 
             correct_sign_predictions = 0
@@ -625,6 +672,8 @@ def train_using_self_play(
                 "training/advantage_std_dev": adv_std,
                 "training/value_last_sign_accuracy": value_sign_accuracy,
                 "training/online_vs_frozen_win_rate": training_win_rate,
+                "progress/iterations": i + 1,
+                "progress/iterations_pct": (i + 1) / iterations,
             }
 
             if value_histogram:
@@ -634,7 +683,7 @@ def train_using_self_play(
             if adv_hist:
                 log_data["training/advantage_distribution"] = adv_hist
 
-            if batch_last_game_online_perspective_values and wandb.run is not None:
+            if batch_last_game_online_perspective_values and wandb_run is not None:
                 if len(batch_last_game_online_perspective_values) > 1:
                     fig = None
                     try:
@@ -682,8 +731,12 @@ def train_using_self_play(
 
                     except Exception as e:
                         print(f"Warning: Failed to create value progression plot: {e}")
+                        if fig is not None:
+                            plt.close(fig)
+                        if "buf" in locals() and not buf.closed:
+                            buf.close()
 
-            if last_final_board_state is not None and wandb.run is not None:
+            if last_final_board_state is not None and wandb_run is not None:
                 board_image_np = create_board_image(last_final_board_state)
                 log_data["training/final_online_vs_frozen_board"] = wandb.Image(
                     board_image_np,
@@ -691,7 +744,7 @@ def train_using_self_play(
                 )
                 last_final_board_state = None
 
-            safe_log_to_wandb(log_data, step=i + 1)
+            safe_log_to_wandb(log_data, step=i + 1, wandb_run=wandb_run)
 
             running_value_loss = 0.0
             running_value_entropy = 0.0
@@ -699,3 +752,5 @@ def train_using_self_play(
             running_advantages = []
             running_last_preds_before_terminal = []
             running_final_outcomes = []
+
+    print("\nTraining loop finished.")

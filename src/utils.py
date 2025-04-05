@@ -1,6 +1,6 @@
 import wandb
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 import json
 import os
 import uuid
@@ -8,6 +8,8 @@ from datetime import datetime
 import numpy as np
 from PIL import Image, ImageDraw
 
+if TYPE_CHECKING:
+    from wandb.sdk.wandb_run import Run
 
 BoardState = List[List[int]]  # can be accessed as board[row][column]
 
@@ -76,13 +78,19 @@ class SavedGame:
         return cls.from_dict(data)
 
 
-def safe_log_to_wandb(data: dict[str, any], step: Optional[int] = None):
-    """
-    Logs data to wandb, optionally specifying the step.
-    If wandb is not initialized, it will not log anything.
-    """
-    if wandb.run is not None:
-        wandb.log(data, step=step)
+def safe_log_to_wandb(
+    data: Dict[str, Any], step: Optional[int] = None, wandb_run: Optional["Run"] = None
+) -> None:
+    """Logs data to W&B if a run is active, otherwise does nothing."""
+    current_run = wandb_run if wandb_run is not None else wandb.run
+    if current_run:
+        try:
+            current_run.log(data, step=step)
+        except Exception as e:
+            print(f"Warning: Failed to log data to W&B: {e}")
+            print(f"Data attempted to log: {data}")
+    # else:
+    # Optional: print("W&B run not active, skipping logging.")
 
 
 def create_board_image(board_state: np.ndarray, cell_size: int = 50) -> np.ndarray:

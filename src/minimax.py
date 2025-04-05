@@ -1,8 +1,8 @@
-from engine import ConnectFour, is_in_terminal_state, make_move, is_legal
+from .engine import ConnectFour, is_in_terminal_state, make_move, is_legal
 from typing import Tuple, List, Dict
 from torch import Tensor
 import torch
-from utils import safe_log_to_wandb, SavedGame
+from .utils import safe_log_to_wandb, SavedGame
 import random
 import numpy as np
 import time

@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify, send_from_directory
-from engine import ConnectFour, is_legal, make_move, is_in_terminal_state
-from model import ValueModel, get_next_value_based_move
-from minimax import minimax_move
-from utils import SavedGame
+from .engine import ConnectFour, is_legal, make_move, is_in_terminal_state
+from .model import ValueModel, get_next_value_based_move
+from .minimax import minimax_move
+from .utils import SavedGame
 import torch
 import os
 import numpy as np
