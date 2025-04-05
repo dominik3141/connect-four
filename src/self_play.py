@@ -11,6 +11,7 @@ import random
 import matplotlib
 import io
 from PIL import Image
+import os  # Added import
 
 matplotlib.use("Agg")  # Use non-interactive backend
 import matplotlib.pyplot as plt
@@ -506,6 +507,25 @@ def train_using_self_play(
                 )
 
             if update_frozen:
+                # Archive the current frozen model before overwriting
+                if wandb.run is not None:
+                    try:
+                        archive_filename = (
+                            f"archived_frozen_value_model_batch_{i + 1}.pth"
+                        )
+                        print(
+                            f"Archiving current frozen value model to {archive_filename} before update..."
+                        )
+                        torch.save(frozen_value_model.state_dict(), archive_filename)
+                        wandb.save(archive_filename)  # Uploads as artifact
+                        print(
+                            f"Archived frozen model saved to W&B Artifacts: {archive_filename}"
+                        )
+                        # Optionally remove the local file after upload if desired
+                        os.remove(archive_filename)
+                    except Exception as e:
+                        print(f"Warning: Failed to archive frozen model to W&B: {e}")
+
                 frozen_value_model.load_state_dict(value_model.state_dict())
                 safe_log_to_wandb(
                     {

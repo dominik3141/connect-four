@@ -18,14 +18,14 @@ if __name__ == "__main__":
         "log_interval": 10,
         "learning_rate": 0.001,
         # --- Exploration Params for Value-Based Moves --- #
-        "online_temperature": 0.1,  # Exploration temp for online value model
+        "online_temperature": 0.5,  # Exploration temp for online value model
         "online_epsilon": 0.1,  # Epsilon-greedy for online value model
-        "frozen_temperature": 0.01,  # Near-greedy temp for frozen value model
-        "frozen_epsilon": 0.0,  # No epsilon-greedy for frozen value model
+        "frozen_temperature": 0.5,  # Greedy temp for frozen value model
+        "frozen_epsilon": 0.1,  # Epsilon-greedy for frozen value model
         # ----------------------------------------------- #
         "discount_factor": 0.95,
         # --- Training Infrastructure ---
-        "load_model": False,  # Load pre-existing value model weights
+        "load_model": True,  # Load pre-existing value model weights
         "save_model": True,  # Save value model locally
         "use_wandb": True,
         # --- Removed policy_model_path ---
@@ -34,7 +34,7 @@ if __name__ == "__main__":
         "online_value_model_path": "online_value_model.pth",  # Path for ONLINE value model
         # --- Evaluation & Target Update ---
         "target_update_freq": 100,
-        "eval_games": 30,
+        "eval_games": 1000,
         "win_rate_threshold": 0.55,
         "stacker_eval_games": 100,
         "force_replace_model": False,  # Now controls replacement of frozen value model
