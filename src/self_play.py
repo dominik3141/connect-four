@@ -1,5 +1,6 @@
 from .model import ValueModel, get_next_value_based_move, board_to_tensor
 from .engine import ConnectFour, make_move, is_in_terminal_state, is_legal, random_move
+from .minimax import minimax_move
 import torch
 import torch.nn.functional as F
 from torch import Tensor
@@ -345,6 +346,107 @@ def evaluate_vs_stacker(
     return model_win_rate, last_game_final_board_state
 
 
+def evaluate_vs_minimax(
+    value_model: ValueModel,
+    num_games: int = 10,
+    minimax_depth: int = 1,
+) -> Tuple[float, Optional[np.ndarray]]:
+    """
+    Evaluates the model's performance against the minimax algorithm.
+    Model uses near-greedy value-based moves. Minimax uses the specified depth.
+    Returns the model's win rate and the final board state of the last game.
+    """
+    model_wins = 0
+    minimax_wins = 0
+    draws = 0
+    last_game_final_board_state: Optional[np.ndarray] = None
+
+    if num_games <= 0:
+        return 0.0, None
+
+    print(
+        f"Starting minimax evaluation: {num_games} games against Minimax (Depth {minimax_depth})..."
+    )
+
+    for i in range(num_games):
+        board = ConnectFour()
+        model_player = 1 if i % 2 == 0 else 2
+        minimax_player = 3 - model_player
+        current_player = 1
+        game_board_state: Optional[np.ndarray] = None
+
+        while True:
+            game_board_state = board.state.copy()
+
+            if current_player == model_player:
+                try:
+                    move, _, _, _, _ = get_next_value_based_move(
+                        value_model,
+                        board,
+                        current_player,
+                        temperature=0.001,  # Near-greedy
+                        epsilon=0,
+                    )
+                except ValueError:
+                    print(
+                        f"Warning: Minimax eval game {i + 1} - Model had no legal moves. Treating as draw."
+                    )
+                    status = 3
+                    break
+            else:  # Minimax turn
+                try:
+                    move = minimax_move(board, current_player, minimax_depth)
+                    # Basic check if minimax returned an illegal move (shouldn't happen with correct implementation)
+                    if not is_legal(board, move):
+                        print(
+                            f"Warning: Minimax eval game {i + 1} - Minimax (Player {current_player}, Depth {minimax_depth}) returned illegal move {move}. Board:\\n{board}\\nChoosing random move instead."
+                        )
+                        move = random_move(board)  # Fallback to random if minimax fails
+                except Exception as e:
+                    print(
+                        f"Warning: Error getting minimax move in eval game {i + 1}: {e}. Choosing random move."
+                    )
+                    try:
+                        move = random_move(board)
+                    except ValueError:  # No legal moves left
+                        print("Board full after minimax error. Ending game as draw.")
+                        status = 3
+                        break
+
+            try:
+                board = make_move(board, current_player, move)
+            except ValueError as e:
+                print(f"Warning: Error making move during minimax eval: {e}")
+                status = 3
+                break
+
+            status = is_in_terminal_state(board)
+
+            if status != 0:
+                game_board_state = board.state.copy()
+                if status == model_player:
+                    model_wins += 1
+                elif status == minimax_player:
+                    minimax_wins += 1
+                elif status == 3:
+                    draws += 1
+                break
+
+            current_player = 3 - current_player
+
+        if i == num_games - 1 and game_board_state is not None:
+            last_game_final_board_state = game_board_state
+
+    total_played = model_wins + minimax_wins + draws
+    model_win_rate = model_wins / total_played if total_played > 0 else 0.0
+
+    print(
+        f"Minimax Evaluation Results: Model Wins: {model_wins}, Minimax Wins: {minimax_wins}, Draws: {draws}"
+    )
+    print(f"Model Win Rate vs Minimax (Depth {minimax_depth}): {model_win_rate:.2%}")
+    return model_win_rate, last_game_final_board_state
+
+
 def train_using_self_play(
     value_model: ValueModel,
     frozen_value_model: ValueModel,
@@ -361,6 +463,8 @@ def train_using_self_play(
     eval_games: int = 20,
     win_rate_threshold: float = 0.55,
     stacker_eval_games: int = 20,
+    minimax_eval_games: int = 20,
+    minimax_eval_depths: List[int] = [4, 7],
     force_replace_model: bool = False,
     wandb_run: Optional["Run"] = None,
 ) -> None:
@@ -390,6 +494,9 @@ def train_using_self_play(
     print(f"Frozen networks evaluated every {target_update_freq} batches.")
     print(f"Frozen network updated if online model win rate > {win_rate_threshold:.1%}")
     print(f"Stacker evaluation uses {stacker_eval_games} games.")
+    print(
+        f"Minimax evaluation uses {minimax_eval_games} games with depth {minimax_eval_depths}."
+    )
 
     for i in range(iterations):
         value_model.train()
@@ -494,6 +601,27 @@ def train_using_self_play(
                     caption=f"Final Stacker Eval Board - Batch {i + 1}",
                 )
             safe_log_to_wandb(stacker_log_data, step=i + 1, wandb_run=wandb_run)
+
+            # --- Evaluate against multiple Minimax depths --- #
+            for depth in minimax_eval_depths:
+                minimax_win_rate, last_minimax_game_board = evaluate_vs_minimax(
+                    value_model,
+                    num_games=minimax_eval_games,
+                    minimax_depth=depth,
+                )
+                minimax_log_data = {
+                    f"evaluation/online_vs_minimax_d{depth}_win_rate": minimax_win_rate
+                }
+                if last_minimax_game_board is not None and wandb_run is not None:
+                    minimax_board_image_np = create_board_image(last_minimax_game_board)
+                    minimax_log_data[
+                        f"evaluation/final_minimax_d{depth}_eval_board"
+                    ] = wandb.Image(
+                        minimax_board_image_np,
+                        caption=f"Final Minimax (d={depth}) Eval Board - Batch {i + 1}",
+                    )
+                safe_log_to_wandb(minimax_log_data, step=i + 1, wandb_run=wandb_run)
+            # --- End Minimax evaluation loop --- #
 
             update_frozen = False
             update_reason = ""

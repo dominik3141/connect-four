@@ -549,8 +549,8 @@
             let message = "";
             let probabilityText = "";
 
-            // Prepare probability text if available
-            if (data.ai_move_prob !== null) {
+            // Prepare probability text if available and it's a number
+            if (data.ai_move_prob !== undefined && data.ai_move_prob !== null) {
                 probabilityText = ` (AI move probability: ${data.ai_move_prob.toFixed(3)})`;
             }
 

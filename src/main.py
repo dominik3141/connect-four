@@ -24,7 +24,7 @@ if __name__ == "__main__":
         # ----------------------------------------------- #
         "discount_factor": 0.95,
         # --- Training Infrastructure ---
-        "load_model": False,  # Load pre-existing value model weights
+        "load_model": True,  # Load pre-existing value model weights
         "save_model": True,  # Save value model locally
         "use_wandb": True,
         # --- Removed policy_model_path ---
@@ -36,6 +36,12 @@ if __name__ == "__main__":
         "eval_games": 1000,
         "win_rate_threshold": 0.55,
         "stacker_eval_games": 100,
+        "minimax_eval_games": 100,  # Number of games vs Minimax
+        "minimax_eval_depths": [
+            4,
+            7,
+            10,
+        ],  # List of depths for Minimax evaluation
         "force_replace_model": False,  # Now controls replacement of frozen value model
     }
 
@@ -131,6 +137,8 @@ if __name__ == "__main__":
             eval_games=hyperparams["eval_games"],
             win_rate_threshold=hyperparams["win_rate_threshold"],
             stacker_eval_games=hyperparams["stacker_eval_games"],
+            minimax_eval_games=hyperparams["minimax_eval_games"],
+            minimax_eval_depths=hyperparams["minimax_eval_depths"],
             force_replace_model=hyperparams["force_replace_model"],
             # Pass the wandb run object if available
             wandb_run=run,  # ADDED wandb_run

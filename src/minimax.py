@@ -1,12 +1,11 @@
 from .engine import ConnectFour, is_in_terminal_state, make_move, is_legal
-from typing import Tuple, List, Dict
-from torch import Tensor
-import torch
-from .utils import safe_log_to_wandb, SavedGame
+from typing import List, Dict
+from .utils import SavedGame
 import random
 import numpy as np
 import time
 import ctypes
+import os
 
 # Load the shared library
 # Ensure the path is correct for your system.
@@ -16,8 +15,6 @@ lib_path = "libs/libconnect4.so"
 # lib_path = "../libs/libconnect4.so"
 
 # Check if the library file exists before trying to load
-import os
-
 if not os.path.exists(lib_path):
     # Try alternative path if running from src directory
     alt_lib_path = "../libs/libconnect4.so"
