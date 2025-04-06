@@ -546,18 +546,29 @@
             currentStateIndex = gameStates.length - 1;
             updateGameControls();
 
+            let message = "";
+            let probabilityText = "";
+
+            // Prepare probability text if available and it's a number
+            if (data.ai_move_prob !== undefined && data.ai_move_prob !== null) {
+                probabilityText = ` (AI move probability: ${data.ai_move_prob.toFixed(3)})`;
+            }
+
             if (data.status === 1) {
-                messageElement.textContent = "You win!";
+                message = "You win!";
                 gameOver = true;
             } else if (data.status === 2) {
-                messageElement.textContent = "AI wins!";
+                // AI Wins - include probability
+                message = "AI wins!" + probabilityText;
                 gameOver = true;
             } else if (data.status === 3) {
-                messageElement.textContent = "It's a stalemate!";
+                message = "It's a stalemate!";
                 gameOver = true;
             } else {
-                messageElement.textContent = "Your turn!";
+                // Game continues - include probability
+                message = "Your turn!" + probabilityText;
             }
+            messageElement.textContent = message;
 
             if (gameOver) {
                 boardElement.style.pointerEvents = 'none';

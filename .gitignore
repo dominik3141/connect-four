@@ -5,3 +5,8 @@ saved_games/
 games.sqlite
 notes.md
 .pytest_cache/
+policy_model.pth
+value_model.pth
+**/*.DS_Store
+online_policy_model.pth
+online_value_model.pth
