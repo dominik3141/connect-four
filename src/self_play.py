@@ -97,7 +97,7 @@ def play_against_self(
             online_value_estimate_t = online_value_model(board_tensor, current_player)
 
         try:
-            move, move_prob, all_probs, value_entropy = get_next_value_based_move(
+            move, move_prob, all_probs, value_entropy, _ = get_next_value_based_move(
                 acting_value_model,
                 final_board,
                 current_player,
@@ -212,7 +212,7 @@ def evaluate_models(
             active_model = model_p1 if current_player == 1 else model_p2
 
             try:
-                move, _, _, _ = get_next_value_based_move(
+                move, _, _, _, _ = get_next_value_based_move(
                     active_model,
                     board,
                     current_player,
@@ -288,7 +288,7 @@ def evaluate_vs_stacker(
 
             if current_player == model_player:
                 try:
-                    move, _, _, _ = get_next_value_based_move(
+                    move, _, _, _, _ = get_next_value_based_move(
                         value_model,
                         board,
                         current_player,

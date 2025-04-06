@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 from .engine import ConnectFour, Move, is_legal, make_move
 import random
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 from torch import Tensor
 
 
@@ -39,7 +39,7 @@ def get_next_value_based_move(
     current_player: int,
     temperature: float = 0.01,
     epsilon: float = 0.0,
-) -> Tuple[Move, Tensor, Tensor, float]:
+) -> Tuple[Move, Tensor, Tensor, float, Tensor]:
     """
     Selects the next move based on the ValueModel's evaluation of subsequent states.
 
@@ -49,9 +49,10 @@ def get_next_value_based_move(
 
     Returns:
         - The chosen move (Move).
-        - The probability of choosing that move under the current policy (Tensor).
-        - The probabilities of all legal moves (Tensor).
-        - The entropy of the move selection distribution (float).
+        - The probability of choosing that move under the actual policy (using input temperature/epsilon) (Tensor).
+        - The probabilities of all legal moves under the actual policy (Tensor).
+        - The entropy of the actual move selection distribution (float).
+        - The probability of choosing that move under a temp=1 policy (Tensor).
     """
     legal_moves: List[Move] = [col for col in range(7) if is_legal(board, col)]
 
@@ -73,43 +74,54 @@ def get_next_value_based_move(
 
     values_tensor = torch.tensor(next_state_values, device=device)
 
-    # Apply temperature scaling and calculate probabilities
+    # --- Calculate Temp=1 probabilities (for reporting/analysis) ---
+    temp_1_probs = F.softmax(values_tensor, dim=0)
+    temp_1_move_prob: Optional[Tensor] = None  # Initialize
+
+    # --- Determine chosen move and actual selection probabilities ---
+    chosen_move: Move
+    move_prob: Tensor
+    probs: Tensor
+    entropy: float
+    chosen_move_idx: int  # Index within legal_moves
+
     if temperature <= 0:  # Greedy selection
-        best_move_idx = torch.argmax(values_tensor).item()
-        chosen_move = legal_moves[best_move_idx]
-        # Create one-hot probabilities for greedy choice
+        chosen_move_idx = torch.argmax(values_tensor).item()
+        chosen_move = legal_moves[chosen_move_idx]
         probs = torch.zeros(len(legal_moves), device=device)
-        probs[best_move_idx] = 1.0
+        probs[chosen_move_idx] = 1.0
         move_prob = torch.tensor(1.0, device=device)
         entropy = 0.0
     else:
-        # Apply temperature
+        # Apply actual temperature
         scaled_values = values_tensor / temperature
-        # Softmax over legal move values
         probs = F.softmax(scaled_values, dim=0)
-        # Sample using Categorical distribution
         distribution = Categorical(probs=probs)
-        entropy = distribution.entropy().item()  # Calculate entropy
+        entropy = distribution.entropy().item()
 
-        # Epsilon-greedy exploration
         if random.random() < epsilon:
-            # Choose a random *legal* move
             chosen_move = random.choice(legal_moves)
-            # Find the index of the chosen move to get its probability
             chosen_move_idx = legal_moves.index(chosen_move)
             move_prob = probs[chosen_move_idx]
         else:
-            # Sample from the distribution
             chosen_move_idx = distribution.sample().item()
             chosen_move = legal_moves[chosen_move_idx]
             move_prob = probs[chosen_move_idx]
 
-    # Map probabilities back to all 7 columns, assigning 0 to illegal moves
+    # --- Get the Temp=1 probability for the *actual* chosen move ---
+    temp_1_move_prob = temp_1_probs[chosen_move_idx]
+
+    # Map actual probabilities back to all 7 columns
     full_probs = torch.zeros(7, device=device)
     for i, move in enumerate(legal_moves):
         full_probs[move] = probs[i]
 
-    return chosen_move, move_prob, full_probs, entropy
+    # Ensure temp_1_move_prob is not None before returning
+    if temp_1_move_prob is None:
+        # This should be unreachable if legal_moves is not empty
+        raise RuntimeError("temp_1_move_prob was not assigned.")
+
+    return chosen_move, move_prob, full_probs, entropy, temp_1_move_prob
 
 
 class ValueModel(nn.Module):
@@ -124,13 +136,13 @@ class ValueModel(nn.Module):
         # Represent as two planes (player 1 presence, player 2 presence) -> 42 * 2 = 84 features.
         # Add one feature for the current player whose turn it is. Total: 85 features.
         self.lin = nn.Sequential(
-            nn.Linear(7 * 6 * 2 + 1, 128),  # Input size confirmed: 84 + 1 = 85
+            nn.Linear(7 * 6 * 2 + 1, 512),  # Input size confirmed: 84 + 1 = 85
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Linear(64, 32),
+            nn.Linear(256, 128),
             nn.ReLU(),
-            nn.Linear(32, 1),
+            nn.Linear(128, 1),
             nn.Tanh(),
         )
 

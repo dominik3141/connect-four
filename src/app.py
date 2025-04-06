@@ -102,23 +102,40 @@ def player_move():
 
     # --- AI's Move (Player 2) ---
     ai_move: int = -1  # Initialize ai_move
+    ai_move_prob: float | None = None  # Initialize probability
     try:
         if opponent == "minimax":
             logger.debug(f"Minimax (Player 2) choosing move with depth {depth}...")
             ai_move = minimax_move(game, player=2, depth=depth)
+            ai_move_prob = None  # No probability for minimax
             logger.debug(f"Minimax chose move: {ai_move}")
         elif opponent == "ai":  # Use the Value Model
             logger.debug("Value Model (Player 2) choosing move...")
             # Use the loaded value_model to get the next move
             # Use low temperature for near-greedy selection in the app
-            ai_move, _, _, _ = get_next_value_based_move(
+            (
+                ai_move,  # Chosen move index
+                _,  # Actual selection probability (ignored)
+                _,  # All actual probabilities (ignored)
+                _,  # Selection entropy (ignored)
+                temp_1_prob,  # Temp=1 probability for the chosen move
+            ) = get_next_value_based_move(
                 value_model=value_model,
                 board=game,
                 current_player=2,
-                temperature=0.001,  # Near-greedy
+                temperature=0.0,  # Near-greedy move selection
                 epsilon=0.0,  # No exploration
             )
-            logger.debug(f"Value Model chose move: {ai_move}")
+
+            # Convert temp=1 tensor probability to float for JSON
+            ai_move_prob = (
+                temp_1_prob.item()
+                if isinstance(temp_1_prob, torch.Tensor)
+                else float(temp_1_prob)
+            )
+            logger.debug(
+                f"Value Model chose move: {ai_move} with temp=1 prob {ai_move_prob:.4f}"
+            )
         else:
             logger.error(f"Unknown opponent type: {opponent}")
             return jsonify({"error": f"Unknown opponent type: {opponent}"}), 400
@@ -151,7 +168,10 @@ def player_move():
     # Check status *after* AI move
     status = is_in_terminal_state(game)
     logger.debug(f"Status after AI move: {status}")
-    return jsonify({"board": game.state.tolist(), "status": status})
+    # Include ai_move_prob in the response
+    return jsonify(
+        {"board": game.state.tolist(), "status": status, "ai_move_prob": ai_move_prob}
+    )
 
 
 @app.route("/list_saved_games", methods=["GET"])

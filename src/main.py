@@ -17,14 +17,14 @@ if __name__ == "__main__":
         "log_interval": 10,
         "learning_rate": 0.001,
         # --- Exploration Params for Value-Based Moves --- #
-        "online_temperature": 0.2,  # Exploration temp for online value model
-        "online_epsilon": 0.0,  # Epsilon-greedy for online value model
-        "frozen_temperature": 0.2,  # Greedy temp for frozen value model
-        "frozen_epsilon": 0.0,  # Epsilon-greedy for frozen value model
+        "online_temperature": 0.5,  # Exploration temp for online value model
+        "online_epsilon": 0.1,  # Epsilon-greedy for online value model
+        "frozen_temperature": 0.5,  # Greedy temp for frozen value model
+        "frozen_epsilon": 0.1,  # Epsilon-greedy for frozen value model
         # ----------------------------------------------- #
         "discount_factor": 0.95,
         # --- Training Infrastructure ---
-        "load_model": True,  # Load pre-existing value model weights
+        "load_model": False,  # Load pre-existing value model weights
         "save_model": True,  # Save value model locally
         "use_wandb": True,
         # --- Removed policy_model_path ---
