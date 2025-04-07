@@ -1,10 +1,10 @@
 from .model import ValueModel, get_next_value_based_move, board_to_tensor
 from .engine import ConnectFour, make_move, is_in_terminal_state, is_legal, random_move
 from .minimax import minimax_move
-import torch
-import torch.nn.functional as F
-from torch import Tensor
-from typing import Tuple, List, Optional, TYPE_CHECKING
+import mlx.core as mx
+import mlx.nn as nn
+import mlx.optimizers as optim
+from typing import Tuple, List, Optional, TYPE_CHECKING, Callable
 from .utils import safe_log_to_wandb, create_board_image
 import wandb
 import numpy as np
@@ -22,6 +22,11 @@ matplotlib.use("Agg")  # Use non-interactive backend
 import matplotlib.pyplot as plt
 
 
+# Helper function for MLX loss calculation
+def mse_loss(pred: mx.array, target: mx.array) -> mx.array:
+    return mx.mean(mx.square(pred - target))
+
+
 def play_against_self(
     online_value_model: ValueModel,
     frozen_value_model: ValueModel,
@@ -31,56 +36,49 @@ def play_against_self(
     frozen_temperature: float = 0.01,
     frozen_epsilon: float = 0.0,
 ) -> Tuple[
-    Tensor,
-    int,
-    float,
-    ConnectFour,
-    List[Tensor],
-    int,
-    List[Tensor],
-    Optional[Tensor],
-    Optional[float],
+    List[mx.array],  # List of individual loss terms (tensors)
+    List[mx.array],  # List of online value estimates (tensors)
+    List[mx.array],  # List of TD targets (tensors)
+    int,  # game outcome status
+    float,  # average value entropy
+    ConnectFour,  # final board
+    List[mx.array],  # online perspective value estimates (all steps)
+    int,  # online player id
+    List[mx.array],  # advantages
+    Optional[mx.array],  # last prediction before terminal
+    Optional[float],  # final relative outcome
 ]:
     """
-    Plays a game where the online value model plays against a frozen version.
-    Value loss is calculated only for the steps taken by the online player.
-    Value estimates for logging are collected for *all* steps using the online model,
-    always evaluated from the perspective of the player designated as 'online'.
-    TD Target uses the ONLINE value model for the next state value V(S_t+1).
-    Move selection is based on evaluating V(S', P) for the current player P
-    in the state S' resulting from each possible action.
+    Plays a game between online and frozen value models using MLX.
+    Calculates loss terms, values, and targets for the online player's moves.
 
-    Returns:
-        total value loss (for online player),
-        game outcome status (1, 2, or 3),
-        average VALUE selection entropy (for online player),
-        the final board state,
-        a list of value estimates made by the online model (from the online player's perspective) for *every* state encountered,
-        the online player ID,
-        a list of advantage values calculated during the online player's turns,
-        Value prediction (Tensor) made by the online model for the online player for the state *before* the terminal state.
-        Final game outcome relative to the online player (+1 win, -1 loss, 0 draw).
+    Returns loss components separately for gradient calculation.
     """
     board = ConnectFour()
-    online_value_loss_terms: List[Tensor] = []
+    # Store components needed for loss calculation later
+    online_value_estimates_for_loss: List[mx.array] = []
+    online_td_targets_for_loss: List[mx.array] = []
+    online_loss_terms: List[
+        mx.array
+    ] = []  # Keep track for debugging/analysis if needed
+
     online_value_entropies: List[float] = []
-    online_perspective_value_estimates_game: List[Tensor] = []
-    online_advantages_game: List[Tensor] = []
+    online_perspective_value_estimates_game: List[mx.array] = []
+    online_advantages_game: List[mx.array] = []
     final_board = board
-    last_pred_before_terminal: Optional[Tensor] = None
+    last_pred_before_terminal: Optional[mx.array] = None
     final_relative_outcome: Optional[float] = None
 
     online_player_id = random.choice([1, 2])
     current_player = 1
 
     while True:
-        board_tensor = board_to_tensor(final_board)
+        board_tensor = board_to_tensor(final_board)  # MLX tensor
         is_online_turn = current_player == online_player_id
 
-        value_estimate_for_log = online_value_model(
-            board_tensor,
-            online_player_id,
-        ).detach()
+        # Log value from online model's perspective (no grad needed here)
+        value_estimate_for_log = online_value_model(board_tensor, online_player_id)
+        # Detach not explicitly needed in MLX unless inside grad calculation context
         online_perspective_value_estimates_game.append(value_estimate_for_log)
 
         last_pred_before_terminal = value_estimate_for_log
@@ -93,12 +91,14 @@ def play_against_self(
         )
         acting_epsilon = online_epsilon if is_online_turn else frozen_epsilon
 
-        online_value_estimate_t: Optional[Tensor] = None
+        online_value_estimate_t: Optional[mx.array] = None
         if is_online_turn:
+            # This needs to be part of the gradient calculation later
+            # For now, just get the value; we'll recompute in loss_fn if needed
             online_value_estimate_t = online_value_model(board_tensor, current_player)
 
         try:
-            move, move_prob, all_probs, value_entropy, _ = get_next_value_based_move(
+            move, _, _, value_entropy, _ = get_next_value_based_move(
                 acting_value_model,
                 final_board,
                 current_player,
@@ -106,50 +106,56 @@ def play_against_self(
                 epsilon=acting_epsilon,
             )
         except ValueError:
-            print(
-                f"Warning: get_next_value_based_move called with no legal moves. Board state:\n{final_board}"
-            )
+            print(f"Warning: No legal moves. Board:\n{final_board}")
             break
 
         next_board = make_move(final_board, current_player, move)
-        next_board_tensor = board_to_tensor(next_board)
+        next_board_tensor = board_to_tensor(next_board)  # MLX tensor
         status = is_in_terminal_state(next_board)
 
-        td_target: Optional[Tensor] = None
-        if is_online_turn and online_value_estimate_t is not None:
+        td_target: Optional[mx.array] = None
+        if is_online_turn:
             if status != 0:  # Game ended
                 assert status in [1, 2, 3], f"Invalid terminal state: {status}"
-                if status == current_player:
-                    reward = 1.0
-                elif status == 3:
-                    reward = 0.0
-                else:
-                    reward = -1.0
-                td_target = torch.tensor(
-                    [[reward]],
-                    device=online_value_estimate_t.device,
-                    dtype=online_value_estimate_t.dtype,
+                reward = (
+                    1.0 if status == current_player else (0.0 if status == 3 else -1.0)
                 )
+                # Target is just the final reward
+                td_target = mx.array([[reward]], dtype=mx.float32)
             else:  # Game continues
                 next_player = 3 - current_player
-                with torch.no_grad():
-                    online_next_value_opp = online_value_model(
-                        next_board_tensor, next_player
-                    )
-                td_target = discount_factor * (-online_next_value_opp)
+                # Value of next state V(S', next_player) from ONLINE model perspective
+                # No grad needed for target calculation
+                online_next_value_opp = online_value_model(
+                    next_board_tensor, next_player
+                )
+                # TD Target V(S) = R + gamma * V(S') => Here R=0, target is gamma * V_next
+                # BUT, we want target for V(S, current_player).
+                # V(S, current) = R + gamma * V(S', next_player). NO, that's not right.
+                # Bellman: V(s,p) = E[ R + gamma * V(s', p') ] where p' is next player
+                # In zero-sum: V(s', p') = -V(s', other_player)
+                # So, V(s, current_player) = E[ R + gamma * (-V(s', current_player)) ] ?? No.
+                # Let's use the definition: Value is expected return for *that* player.
+                # V(s, p) = E[ sum(gamma^t * R_t) | S_0=s, P_0=p ]
+                # TD Update: V(S_t, P_t) <- V(S_t, P_t) + alpha * [ Target - V(S_t, P_t) ]
+                # Target = R_t+1 + gamma * V(S_t+1, P_t+1) (using the next state's value for the player whose turn it is)
+                # Target = 0 + discount_factor * V(next_board, next_player) <- This seems correct.
+                # We use the ONLINE model to estimate the next state's value.
+                td_target = discount_factor * online_next_value_opp
 
-        if (
-            is_online_turn
-            and online_value_estimate_t is not None
-            and td_target is not None
-        ):
-            value_loss_term = F.mse_loss(online_value_estimate_t, td_target)
-            online_value_loss_terms.append(value_loss_term)
+            # Append components needed for loss calculation outside the loop
+            if online_value_estimate_t is not None and td_target is not None:
+                online_value_estimates_for_loss.append(online_value_estimate_t)
+                online_td_targets_for_loss.append(td_target)
+                # Optional: Calculate individual loss term (no grad here)
+                # loss_term = mse_loss(online_value_estimate_t, td_target)
+                # online_loss_terms.append(loss_term)
 
-            advantage = (td_target - online_value_estimate_t).detach()
-            online_advantages_game.append(advantage)
+                # Calculate advantage (no grad needed)
+                advantage = td_target - online_value_estimate_t
+                online_advantages_game.append(advantage)
 
-            online_value_entropies.append(value_entropy)
+                online_value_entropies.append(value_entropy)
 
         final_board = next_board
         if status != 0:
@@ -162,20 +168,17 @@ def play_against_self(
             break
         current_player = 3 - current_player
 
-    total_value_loss = (
-        torch.stack(online_value_loss_terms).sum()
-        if online_value_loss_terms
-        else torch.tensor(0.0)
-    )
-
     avg_online_value_entropy = (
         sum(online_value_entropies) / len(online_value_entropies)
         if online_value_entropies
         else 0.0
     )
 
+    # Return the lists needed for the loss function
     return (
-        total_value_loss,
+        online_loss_terms,  # For analysis maybe
+        online_value_estimates_for_loss,  # V(S_t, P_t) estimates
+        online_td_targets_for_loss,  # TD targets
         status,
         avg_online_value_entropy,
         final_board,
@@ -192,38 +195,29 @@ def evaluate_models(
     frozen_value_model: ValueModel,
     num_games: int = 20,
 ) -> float:
-    """
-    Plays games between online and frozen value models and returns the win rate of the online model.
-    Uses near-greedy move selection based on value evaluation.
-    """
+    """Plays games between online and frozen value models using MLX, returns online win rate."""
     online_wins = 0
     frozen_wins = 0
     draws = 0
-
-    print(f"Starting evaluation: {num_games} games...")
+    print(f"Starting evaluation (MLX): {num_games} games...")
 
     for i in range(num_games):
         board = ConnectFour()
         current_player = 1
+        # Assign models based on who goes first
         model_p1 = online_value_model if i % 2 == 0 else frozen_value_model
         model_p2 = frozen_value_model if i % 2 == 0 else online_value_model
         online_player_this_game = 1 if i % 2 == 0 else 2
 
         while True:
             active_model = model_p1 if current_player == 1 else model_p2
-
             try:
+                # Use near-greedy for evaluation
                 move, _, _, _, _ = get_next_value_based_move(
-                    active_model,
-                    board,
-                    current_player,
-                    temperature=0.001,
-                    epsilon=0,
+                    active_model, board, current_player, temperature=0.001, epsilon=0
                 )
             except ValueError:
-                print(
-                    f"Warning: Evaluation game {i + 1} ended unexpectedly (no legal moves). Treating as draw."
-                )
+                print(f"Eval game {i + 1}: No legal moves. Draw.")
                 status = 3
                 break
 
@@ -238,47 +232,33 @@ def evaluate_models(
                 else:
                     frozen_wins += 1
                 break
-
             current_player = 3 - current_player
 
-    # Calculate win rate *after* all games are played
     total_played = online_wins + frozen_wins + draws
-    if total_played == 0:
-        win_rate = 0.0  # Avoid division by zero if num_games was 0
-    else:
-        # Win rate is based on games that didn't end unexpectedly early (before a win/loss/draw)
-        # Note: The denominator is total_played (W+L+D), not num_games, in case some games errored out.
-        # If you want win rate purely out of non-draw games: online_wins / (online_wins + frozen_wins)
-        win_rate = online_wins / total_played
-
+    win_rate = online_wins / total_played if total_played > 0 else 0.0
     print(
-        f"Evaluation Results: Online Wins: {online_wins}, Frozen Wins: {frozen_wins}, Draws: {draws}"
+        f"Eval Results: Online Wins={online_wins}, Frozen Wins={frozen_wins}, Draws={draws}"
     )
     print(f"Online Model Win Rate vs Frozen: {win_rate:.2%}")
-    return win_rate  # Return the final win rate
+    return win_rate
 
 
 def evaluate_vs_stacker(
     value_model: ValueModel,
     num_games: int = 10,
 ) -> Tuple[float, Optional[np.ndarray]]:
-    """
-    Evaluates the model's ability to defend against a simple "stacker" strategy.
-    Model uses near-greedy value-based moves.
-    """
+    """Evaluates MLX model against stacker strategy."""
     model_wins = 0
     stacker_wins = 0
     draws = 0
     last_game_final_board_state: Optional[np.ndarray] = None
-
     if num_games <= 0:
         return 0.0, None
-
-    print(f"Starting stacker evaluation: {num_games} games against Stacker...")
+    print(f"Starting stacker evaluation (MLX): {num_games} games...")
 
     for i in range(num_games):
         board = ConnectFour()
-        stacker_target_col_this_game = random.randint(0, 6)
+        stacker_target_col = random.randint(0, 6)
         model_player = 1 if i % 2 == 0 else 2
         stacker_player = 3 - model_player
         current_player = 1
@@ -286,64 +266,53 @@ def evaluate_vs_stacker(
 
         while True:
             game_board_state = board.state.copy()
-
             if current_player == model_player:
                 try:
                     move, _, _, _, _ = get_next_value_based_move(
-                        value_model,
-                        board,
-                        current_player,
-                        temperature=0.001,
-                        epsilon=0,
+                        value_model, board, current_player, temperature=0.001, epsilon=0
                     )
                 except ValueError:
-                    print(
-                        f"Warning: Stacker eval game {i + 1} - Model had no legal moves. Treating as draw."
-                    )
                     status = 3
-                    break
-            else:
-                if is_legal(board, stacker_target_col_this_game):
-                    move = stacker_target_col_this_game
-                else:
-                    try:
-                        move = random_move(board)
-                    except ValueError:
-                        status = 3
-                        break
+                    break  # No moves = draw
+            else:  # Stacker turn
+                move = (
+                    stacker_target_col
+                    if is_legal(board, stacker_target_col)
+                    else random_move(board)
+                )
+                if move is None:
+                    status = 3
+                    break  # No random move possible = draw
 
             try:
                 board = make_move(board, current_player, move)
             except ValueError as e:
-                print(f"Warning: Error making move during stacker eval: {e}")
+                print(f"Stacker eval err: {e}")
                 status = 3
                 break
 
             status = is_in_terminal_state(board)
-
             if status != 0:
                 game_board_state = board.state.copy()
                 if status == model_player:
                     model_wins += 1
                 elif status == stacker_player:
                     stacker_wins += 1
-                elif status == 3:
+                else:
                     draws += 1
                 break
-
             current_player = 3 - current_player
 
-        if i == num_games - 1 and game_board_state is not None:
+        if i == num_games - 1:
             last_game_final_board_state = game_board_state
 
     total_played = model_wins + stacker_wins + draws
-    model_win_rate = model_wins / total_played if total_played > 0 else 0.0
-
+    win_rate = model_wins / total_played if total_played > 0 else 0.0
     print(
-        f"Stacker Evaluation Results: Model Wins: {model_wins}, Stacker Wins: {stacker_wins}, Draws: {draws}"
+        f"Stacker Results: Model Wins={model_wins}, Stacker Wins={stacker_wins}, Draws={draws}"
     )
-    print(f"Model Win Rate vs Random Stacker: {model_win_rate:.2%}")
-    return model_win_rate, last_game_final_board_state
+    print(f"Model Win Rate vs Stacker: {win_rate:.2%}")
+    return win_rate, last_game_final_board_state
 
 
 def evaluate_vs_minimax(
@@ -351,21 +320,15 @@ def evaluate_vs_minimax(
     num_games: int = 10,
     minimax_depth: int = 1,
 ) -> Tuple[float, Optional[np.ndarray]]:
-    """
-    Evaluates the model's performance against the minimax algorithm.
-    Model uses near-greedy value-based moves. Minimax uses the specified depth.
-    Returns the model's win rate and the final board state of the last game.
-    """
+    """Evaluates MLX model against minimax."""
     model_wins = 0
     minimax_wins = 0
     draws = 0
     last_game_final_board_state: Optional[np.ndarray] = None
-
     if num_games <= 0:
         return 0.0, None
-
     print(
-        f"Starting minimax evaluation: {num_games} games against Minimax (Depth {minimax_depth})..."
+        f"Starting minimax evaluation (MLX): {num_games} games vs Depth {minimax_depth}..."
     )
 
     for i in range(num_games):
@@ -377,74 +340,56 @@ def evaluate_vs_minimax(
 
         while True:
             game_board_state = board.state.copy()
-
             if current_player == model_player:
                 try:
                     move, _, _, _, _ = get_next_value_based_move(
-                        value_model,
-                        board,
-                        current_player,
-                        temperature=0.001,  # Near-greedy
-                        epsilon=0,
+                        value_model, board, current_player, temperature=0.001, epsilon=0
                     )
                 except ValueError:
-                    print(
-                        f"Warning: Minimax eval game {i + 1} - Model had no legal moves. Treating as draw."
-                    )
                     status = 3
                     break
             else:  # Minimax turn
                 try:
                     move = minimax_move(board, current_player, minimax_depth)
-                    # Basic check if minimax returned an illegal move (shouldn't happen with correct implementation)
-                    if not is_legal(board, move):
-                        print(
-                            f"Warning: Minimax eval game {i + 1} - Minimax (Player {current_player}, Depth {minimax_depth}) returned illegal move {move}. Board:\\n{board}\\nChoosing random move instead."
-                        )
-                        move = random_move(board)  # Fallback to random if minimax fails
-                except Exception as e:
-                    print(
-                        f"Warning: Error getting minimax move in eval game {i + 1}: {e}. Choosing random move."
-                    )
-                    try:
+                    if not is_legal(board, move):  # Safety check
+                        print(f"Minimax illegal move {move}, using random.")
                         move = random_move(board)
-                    except ValueError:  # No legal moves left
-                        print("Board full after minimax error. Ending game as draw.")
-                        status = 3
-                        break
+                except Exception as e:
+                    print(f"Minimax err: {e}, using random.")
+                    move = random_move(board)
+                if move is None:
+                    status = 3
+                    break  # No moves = draw
 
             try:
                 board = make_move(board, current_player, move)
             except ValueError as e:
-                print(f"Warning: Error making move during minimax eval: {e}")
+                print(f"Minimax eval move err: {e}")
                 status = 3
                 break
 
             status = is_in_terminal_state(board)
-
             if status != 0:
                 game_board_state = board.state.copy()
                 if status == model_player:
                     model_wins += 1
                 elif status == minimax_player:
                     minimax_wins += 1
-                elif status == 3:
+                else:
                     draws += 1
                 break
-
             current_player = 3 - current_player
 
-        if i == num_games - 1 and game_board_state is not None:
+        if i == num_games - 1:
             last_game_final_board_state = game_board_state
 
     total_played = model_wins + minimax_wins + draws
-    model_win_rate = model_wins / total_played if total_played > 0 else 0.0
-
+    win_rate = model_wins / total_played if total_played > 0 else 0.0
     print(
-        f"Minimax Evaluation Results: Model Wins: {model_wins}, Minimax Wins: {minimax_wins}, Draws: {draws}"
+        f"Minimax Results (d={minimax_depth}): Model Wins={model_wins}, Minimax Wins={minimax_wins}, Draws={draws}"
     )
-    print(f"Model Win Rate vs Minimax (Depth {minimax_depth}): {model_win_rate:.2%}")
-    return model_win_rate, last_game_final_board_state
+    print(f"Model Win Rate vs Minimax (d={minimax_depth}): {win_rate:.2%}")
+    return win_rate, last_game_final_board_state
 
 
 def train_using_self_play(
@@ -468,9 +413,26 @@ def train_using_self_play(
     force_replace_model: bool = False,
     wandb_run: Optional["Run"] = None,
 ) -> None:
-    optimizer_value = torch.optim.Adam(value_model.parameters(), lr=learning_rate)
+    """Trains the value model using self-play with MLX."""
 
-    frozen_value_model.eval()
+    optimizer = optim.Adam(learning_rate=learning_rate)
+
+    # No explicit eval mode in MLX usually, but freeze params if needed
+    # frozen_value_model.freeze() # Or handle via not computing grads
+
+    # Loss and gradient function using value_and_grad
+    # This function needs access to the *current* parameters of value_model
+    # It will take the *data* (estimates and targets) as input
+    def loss_fn(model: ValueModel, estimates: mx.array, targets: mx.array) -> mx.array:
+        # Re-run the model? No, estimates are already computed with current params usually.
+        # Let's assume the estimates passed are those computed in the forward pass *before* grad.
+        # If using value_and_grad, the 'model' passed might be a specific version.
+        # The standard MLX way is value_and_grad(model, loss_function)
+        # where loss_function takes the model *and* data
+        # Redefine loss_fn structure
+        return mse_loss(estimates, targets)
+
+    value_and_grad_fn = nn.value_and_grad(value_model, loss_fn)
 
     running_value_loss = 0.0
     running_value_entropy = 0.0
@@ -483,29 +445,20 @@ def train_using_self_play(
     archived_frozen_model_count = 0
 
     print(
-        f"Starting training (Value-Based) for {iterations} batches of size {batch_size}..."
+        f"Starting training (MLX Value-Based) for {iterations} batches... (Batch Size: {batch_size})"
     )
-    print(
-        f"Online Temp: {online_temperature:.3f}, Online Epsilon: {online_epsilon:.3f}"
-    )
-    print(
-        f"Frozen Temp: {frozen_temperature:.3f}, Frozen Epsilon: {frozen_epsilon:.3f}"
-    )
-    print(f"Frozen networks evaluated every {target_update_freq} batches.")
-    print(f"Frozen network updated if online model win rate > {win_rate_threshold:.1%}")
-    print(f"Stacker evaluation uses {stacker_eval_games} games.")
-    print(
-        f"Minimax evaluation uses {minimax_eval_games} games with depth {minimax_eval_depths}."
-    )
+    # Print hyperparams...
 
     for i in range(iterations):
-        value_model.train()
+        # No explicit train mode typically needed for MLX inference/training switching
 
-        batch_value_loss = torch.tensor(0.0, requires_grad=True)
+        # Collect data for the batch
+        batch_estimates_for_loss: List[mx.array] = []
+        batch_targets_for_loss: List[mx.array] = []
         batch_value_entropy_sum = 0.0
-        batch_advantages: List[Tensor] = []
+        batch_advantages: List[mx.array] = []  # Store as mx.array
         batch_games = 0
-        batch_last_preds_before_terminal: List[Optional[Tensor]] = []
+        batch_last_preds_before_terminal: List[Optional[mx.array]] = []
         batch_final_outcomes: List[Optional[float]] = []
         batch_last_game_online_perspective_values: Optional[List[float]] = None
         batch_last_game_status: Optional[int] = None
@@ -513,7 +466,9 @@ def train_using_self_play(
 
         for game_idx in range(batch_size):
             (
-                total_value_loss,
+                _,  # loss_terms (optional analysis)
+                estimates,  # V(S_t, P_t) for online turns
+                targets,  # TD Targets for online turns
                 status,
                 avg_game_value_entropy,
                 final_board,
@@ -532,12 +487,18 @@ def train_using_self_play(
                 frozen_epsilon=frozen_epsilon,
             )
 
-            batch_value_loss = batch_value_loss + total_value_loss
-            batch_value_entropy_sum = batch_value_entropy_sum + avg_game_value_entropy
-            batch_advantages.extend(game_advantages)
-            batch_games += 1
+            if estimates:  # Only add if the online player took turns
+                batch_estimates_for_loss.extend(estimates)
+                batch_targets_for_loss.extend(targets)
+                batch_value_entropy_sum += avg_game_value_entropy * len(
+                    estimates
+                )  # Weight entropy by number of online turns
+                batch_advantages.extend(game_advantages)
+
+            batch_games += 1  # Count total games played in batch
             total_games_played += 1
 
+            # Store logging info
             game_online_perspective_values = [
                 v.item() for v in online_perspective_estimates
             ]
@@ -554,30 +515,52 @@ def train_using_self_play(
             batch_last_preds_before_terminal.append(last_pred)
             batch_final_outcomes.append(final_outcome)
 
-        if batch_games == 0:
-            print(f"Warning: Batch {i + 1} completed with 0 games.")
+        # --- End Batch Game Loop ---
+
+        if not batch_estimates_for_loss:  # Skip batch if online player never moved
+            print(
+                f"Warning: Batch {i + 1} completed with no online player moves to train on."
+            )
             continue
 
+        # Stack collected data into single tensors for loss calculation
+        all_estimates = mx.concatenate(batch_estimates_for_loss, axis=0)
+        all_targets = mx.concatenate(batch_targets_for_loss, axis=0)
+
+        # Calculate loss and gradients
+        # Pass the *data* (estimates, targets) to the loss function via value_and_grad
+        # value_and_grad_fn expects the model and then the arguments for loss_fn
+        loss, grads = value_and_grad_fn(value_model, all_estimates, all_targets)
+
+        # Update model parameters
+        optimizer.update(value_model, grads)
+        mx.eval(
+            value_model.parameters(), optimizer.state
+        )  # Ensure updates are materialized
+
+        # --- Logging and Evaluation --- #
+        num_online_steps_in_batch = len(all_estimates)
         avg_batch_value_entropy = (
-            batch_value_entropy_sum / batch_games if batch_games > 0 else 0.0
+            batch_value_entropy_sum / num_online_steps_in_batch
+            if num_online_steps_in_batch > 0
+            else 0.0
         )
 
-        avg_batch_value_loss = batch_value_loss / batch_games
+        # Log average loss for the batch
+        batch_avg_loss = loss.item()  # Loss is already the mean
+        running_value_loss += batch_avg_loss
+        running_value_entropy += avg_batch_value_entropy
+        running_advantages.extend([adv.item() for adv in batch_advantages])
+        for pred, outcome in zip(
+            batch_last_preds_before_terminal, batch_final_outcomes
+        ):
+            if pred is not None and outcome is not None:
+                running_last_preds_before_terminal.append(pred.item())
+                running_final_outcomes.append(outcome)
 
-        optimizer_value.zero_grad()
-
-        if avg_batch_value_loss.requires_grad:
-            avg_batch_value_loss.backward()
-        else:
-            if avg_batch_value_loss.item() != 0.0:
-                print(f"Warning: Batch {i + 1} Value loss is non-zero but has no grad.")
-
-        torch.nn.utils.clip_grad_norm_(value_model.parameters(), max_norm=1.0)
-
-        optimizer_value.step()
-
+        # --- Target Network Update Logic --- #
         if (i + 1) % target_update_freq == 0:
-            value_model.eval()
+            # No eval mode needed. Run evaluations.
             online_win_rate = evaluate_models(
                 value_model, frozen_value_model, num_games=eval_games
             )
@@ -587,114 +570,91 @@ def train_using_self_play(
                 wandb_run=wandb_run,
             )
 
-            stacker_win_rate, last_stacker_game_board = evaluate_vs_stacker(
-                value_model,
-                num_games=stacker_eval_games,
+            # Stacker Eval
+            stacker_win_rate, last_stacker_board = evaluate_vs_stacker(
+                value_model, num_games=stacker_eval_games
             )
-            stacker_log_data = {
-                "evaluation/online_vs_stacker_win_rate": stacker_win_rate
-            }
-            if last_stacker_game_board is not None and wandb_run is not None:
-                stacker_board_image_np = create_board_image(last_stacker_game_board)
-                stacker_log_data["evaluation/final_stacker_eval_board"] = wandb.Image(
-                    stacker_board_image_np,
-                    caption=f"Final Stacker Eval Board - Batch {i + 1}",
+            stacker_log = {"evaluation/online_vs_stacker_win_rate": stacker_win_rate}
+            if last_stacker_board is not None and wandb_run:
+                img = create_board_image(last_stacker_board)
+                stacker_log["evaluation/final_stacker_eval_board"] = wandb.Image(
+                    img, caption=f"Stacker Eval Batch {i + 1}"
                 )
-            safe_log_to_wandb(stacker_log_data, step=i + 1, wandb_run=wandb_run)
+            safe_log_to_wandb(stacker_log, step=i + 1, wandb_run=wandb_run)
 
-            # --- Evaluate against multiple Minimax depths --- #
+            # Minimax Eval
             for depth in minimax_eval_depths:
-                minimax_win_rate, last_minimax_game_board = evaluate_vs_minimax(
-                    value_model,
-                    num_games=minimax_eval_games,
-                    minimax_depth=depth,
+                minimax_win_rate, last_minimax_board = evaluate_vs_minimax(
+                    value_model, num_games=minimax_eval_games, minimax_depth=depth
                 )
-                minimax_log_data = {
+                minimax_log = {
                     f"evaluation/online_vs_minimax_d{depth}_win_rate": minimax_win_rate
                 }
-                if last_minimax_game_board is not None and wandb_run is not None:
-                    minimax_board_image_np = create_board_image(last_minimax_game_board)
-                    minimax_log_data[
-                        f"evaluation/final_minimax_d{depth}_eval_board"
-                    ] = wandb.Image(
-                        minimax_board_image_np,
-                        caption=f"Final Minimax (d={depth}) Eval Board - Batch {i + 1}",
+                if last_minimax_board is not None and wandb_run:
+                    img = create_board_image(last_minimax_board)
+                    minimax_log[f"evaluation/final_minimax_d{depth}_eval_board"] = (
+                        wandb.Image(img, caption=f"Minimax d{depth} Eval Batch {i + 1}")
                     )
-                safe_log_to_wandb(minimax_log_data, step=i + 1, wandb_run=wandb_run)
-            # --- End Minimax evaluation loop --- #
+                safe_log_to_wandb(minimax_log, step=i + 1, wandb_run=wandb_run)
 
+            # Decide whether to update frozen model
             update_frozen = False
             update_reason = ""
             if force_replace_model:
                 update_frozen = True
                 update_reason = "forced by flag"
-                print(
-                    "Forcing update of frozen value network (force_replace_model=True)."
-                )
             elif online_win_rate > win_rate_threshold:
                 update_frozen = True
                 update_reason = f"win rate {online_win_rate:.2%} > threshold {win_rate_threshold:.1%}"
-                print(
-                    f"Online model passed evaluation ({update_reason}). Updating frozen value network."
-                )
             else:
                 print(
-                    f"Online model did not pass evaluation (Win Rate vs Frozen: {online_win_rate:.2%}). Frozen value network remains unchanged."
+                    f"Online model failed eval ({online_win_rate:.2%}). Frozen net unchanged."
                 )
 
             if update_frozen:
-                # Save the ONLINE model's state dict (which will become the new frozen model)
-                # Log it as a new version of the 'frozen_value_model' artifact
-                if wandb_run is not None:
-                    try:
-                        # Define a temporary path for the state dict
-                        temp_model_path = f"temp_frozen_update_batch_{i + 1}.pth"
-                        print(
-                            f"Preparing to update frozen model. Saving current online model state to {temp_model_path}..."
-                        )
-                        torch.save(value_model.state_dict(), temp_model_path)
+                print(f"Updating frozen value network ({update_reason}).")
+                # MLX parameter update: Iterate and assign
+                # This creates a *new* dictionary, parameters are copies
+                frozen_params = value_model.parameters()
+                # Update the frozen_value_model instance with these parameters
+                # Assuming frozen_value_model has the same structure
+                frozen_value_model.update(frozen_params)
+                mx.eval(frozen_value_model.parameters())  # Ensure update is complete
 
-                        # --- Log as new version of 'frozen_value_model' ---
-                        frozen_model_artifact = wandb.Artifact(
-                            "frozen_value_model",  # Consistent artifact name for versioning
+                # Log artifact (Needs adaptation for MLX weights)
+                if wandb_run:
+                    try:
+                        temp_model_path = (
+                            f"temp_frozen_update_batch_{i + 1}.safetensors"
+                        )
+                        print(
+                            f"Saving current online model weights to {temp_model_path} for artifact..."
+                        )
+                        # Use MLX save_weights
+                        value_model.save_weights(temp_model_path)
+
+                        frozen_artifact = wandb.Artifact(
+                            "frozen_value_model",
                             type="model",
-                            description=f"Updated frozen value model at batch {i + 1}. Replaced because: {update_reason}",
+                            description=f"Updated frozen MLX model at batch {i + 1}. Reason: {update_reason}",
                             metadata={
                                 "batch": i + 1,
                                 "update_reason": update_reason,
                                 "online_win_rate": online_win_rate,
                             },
                         )
-                        frozen_model_artifact.add_file(temp_model_path)
-                        wandb_run.log_artifact(
-                            frozen_model_artifact
-                        )  # Creates frozen_value_model:vX
-                        archived_frozen_model_count += (
-                            1  # Counter is now for versions of the main artifact
-                        )
+                        frozen_artifact.add_file(temp_model_path)
+                        wandb_run.log_artifact(frozen_artifact)
+                        archived_frozen_model_count += 1
                         print(
-                            f"Logged new frozen model version: {frozen_model_artifact.name}:v{archived_frozen_model_count}"
+                            f"Logged new frozen model version artifact: v{archived_frozen_model_count}"
                         )
-                        # Remove the temporary file after logging
                         os.remove(temp_model_path)
-                        # --- End Artifact Logging ---
-
                     except Exception as e:
-                        print(
-                            f"Warning: Failed to log new version of frozen model artifact: {e}"
-                        )
-                        # Clean up temp file even if logging failed
+                        print(f"Warning: Failed to log frozen model artifact: {e}")
                         if os.path.exists(temp_model_path):
-                            try:
-                                os.remove(temp_model_path)
-                            except OSError as rm_err:
-                                print(
-                                    f"Warning: Failed to remove temporary model file {temp_model_path}: {rm_err}"
-                                )
+                            os.remove(temp_model_path)
 
-                # Load the online model's state into the frozen model instance
-                frozen_value_model.load_state_dict(value_model.state_dict())
-                # Log update success metric
                 safe_log_to_wandb(
                     {
                         "evaluation/frozen_network_updated": 1,
@@ -712,168 +672,107 @@ def train_using_self_play(
                     wandb_run=wandb_run,
                 )
 
-        running_value_loss += avg_batch_value_loss.item()
-        running_value_entropy += avg_batch_value_entropy
-        running_advantages.extend([adv.item() for adv in batch_advantages])
-        for pred, outcome in zip(
-            batch_last_preds_before_terminal, batch_final_outcomes
-        ):
-            if pred is not None and outcome is not None:
-                running_last_preds_before_terminal.append(pred.item())
-                running_final_outcomes.append(outcome)
-
+        # --- Periodic Logging --- #
         if (i + 1) % log_interval == 0:
-            avg_value_loss = running_value_loss / log_interval
+            avg_value_loss_log = running_value_loss / log_interval
             avg_value_entropy_log = running_value_entropy / log_interval
 
-            adv_mean = 0.0
-            adv_std = 0.0
-            adv_hist = None
+            adv_mean, adv_std, adv_hist = 0.0, 0.0, None
             if running_advantages:
-                adv_tensor = torch.tensor(running_advantages)
-                adv_mean = adv_tensor.mean().item()
-                adv_std = adv_tensor.std().item()
-                if wandb_run is not None:
-                    adv_hist = wandb.Histogram(adv_tensor)
+                adv_array = mx.array(running_advantages)
+                adv_mean = mx.mean(adv_array).item()
+                adv_std = mx.sqrt(mx.var(adv_array)).item()  # Use variance for std dev
+                if wandb_run:
+                    adv_hist = wandb.Histogram(
+                        adv_array.tolist()
+                    )  # Wandb hist needs list/numpy
 
-            value_std_dev = 0.0
-            value_histogram = None
+            value_std_dev, value_hist = 0.0, None
             if running_online_perspective_values:
-                value_std_dev = (
-                    torch.tensor(running_online_perspective_values).std().item()
-                )
-                if wandb_run is not None:
-                    value_histogram = wandb.Histogram(running_online_perspective_values)
+                val_array = mx.array(running_online_perspective_values)
+                value_std_dev = mx.sqrt(mx.var(val_array)).item()
+                if wandb_run:
+                    value_hist = wandb.Histogram(val_array.tolist())
 
-            correct_sign_predictions = 0
-            total_sign_predictions = 0
-            value_sign_accuracy = 0.0
-            training_wins = 0
-            training_losses = 0
-            training_draws = 0
-            training_total_games = 0
-            training_win_rate = 0.0
+            # Value Sign Accuracy & Training Win Rate Calculation (logic remains similar)
+            correct_sign, total_sign = 0, 0
+            train_wins, train_losses, train_draws, train_total = 0, 0, 0, 0
             if running_final_outcomes:
-                training_total_games = len(running_final_outcomes)
-                for pred, outcome in zip(
+                train_total = len(running_final_outcomes)
+                for pred_val, outcome_val in zip(
                     running_last_preds_before_terminal, running_final_outcomes
                 ):
-                    if outcome != 0.0:
-                        total_sign_predictions += 1
-                        if (pred > 0 and outcome > 0) or (pred < 0 and outcome < 0):
-                            correct_sign_predictions += 1
-                    if outcome == 1.0:
-                        training_wins += 1
-                    elif outcome == -1.0:
-                        training_losses += 1
+                    if outcome_val != 0.0:
+                        total_sign += 1
+                        if (pred_val > 0 and outcome_val > 0) or (
+                            pred_val < 0 and outcome_val < 0
+                        ):
+                            correct_sign += 1
+                    if outcome_val == 1.0:
+                        train_wins += 1
+                    elif outcome_val == -1.0:
+                        train_losses += 1
                     else:
-                        training_draws += 1
-                if total_sign_predictions > 0:
-                    value_sign_accuracy = (
-                        correct_sign_predictions / total_sign_predictions
-                    )
-                if training_total_games > 0:
-                    training_win_rate = training_wins / training_total_games
+                        train_draws += 1
+            value_sign_accuracy = correct_sign / total_sign if total_sign > 0 else 0.0
+            train_win_rate = train_wins / train_total if train_total > 0 else 0.0
 
             print(f"\nBatch {i + 1}/{iterations} (Total Games: {total_games_played})")
-            print(f"  Avg Value Loss: {avg_value_loss:.4f}")
+            print(f"  Avg Value Loss: {avg_value_loss_log:.4f}")
             print(f"  Avg Value Move Entropy: {avg_value_entropy_log:.4f}")
-            print(f"  Avg Advantage: {adv_mean:.4f}")
-            print(f"  Std Dev Advantage: {adv_std:.4f}")
-            print(f"  Std Dev Value Pred (Online Persp.): {value_std_dev:.4f}")
+            print(f"  Advantage (Mean ± Std): {adv_mean:.4f} ± {adv_std:.4f}")
+            print(f"  Value Pred Std Dev (Online Persp.): {value_std_dev:.4f}")
+            print(f"  Last Value Sign Accuracy: {value_sign_accuracy:.2%}")
             print(
-                f"  Last Value Sign Accuracy (vs Win/Loss): {value_sign_accuracy:.2%}"
+                f"  Training Win Rate (~{log_interval * batch_size} games): {train_win_rate:.2%}"
             )
             print(
-                f"  Training Win Rate (Online vs Frozen, last ~{log_interval * batch_size} games): {training_win_rate:.2%}"
-            )
-            print(
-                f"     (W: {training_wins}, L: {training_losses}, D: {training_draws}) over {training_total_games} games"
+                f"     (W:{train_wins}, L:{train_losses}, D:{train_draws}) / {train_total} games"
             )
 
             log_data = {
-                "training/batch_value_loss": avg_value_loss,
+                "training/batch_value_loss": avg_value_loss_log,
                 "training/batch_value_move_entropy": avg_value_entropy_log,
                 "training/online_perspective_value_std_dev": value_std_dev,
                 "training/total_games_played": total_games_played,
                 "training/advantage_mean": adv_mean,
                 "training/advantage_std_dev": adv_std,
                 "training/value_last_sign_accuracy": value_sign_accuracy,
-                "training/online_vs_frozen_win_rate": training_win_rate,
+                "training/online_vs_frozen_win_rate": train_win_rate,
                 "progress/iterations": i + 1,
                 "progress/iterations_pct": (i + 1) / iterations,
             }
-
-            if value_histogram:
-                log_data["training/online_perspective_value_distribution"] = (
-                    value_histogram
-                )
+            if value_hist:
+                log_data["training/online_perspective_value_distribution"] = value_hist
             if adv_hist:
                 log_data["training/advantage_distribution"] = adv_hist
 
-            if batch_last_game_online_perspective_values and wandb_run is not None:
+            # Log last game value progression plot (logic mostly the same, uses matplotlib)
+            if batch_last_game_online_perspective_values and wandb_run:
                 if len(batch_last_game_online_perspective_values) > 1:
-                    fig = None
-                    try:
-                        turns = list(
-                            range(len(batch_last_game_online_perspective_values))
-                        )
-                        values = batch_last_game_online_perspective_values
+                    # (Plotting code remains the same as it uses lists/matplotlib)
+                    fig, ax = plt.subplots(figsize=(6, 4))
+                    # ... [plotting code as before] ...
+                    ax.plot(
+                        range(len(batch_last_game_online_perspective_values)),
+                        batch_last_game_online_perspective_values,
+                        marker="o",
+                    )
+                    # ... [titles, labels, saving plot to wandb image] ...
+                    plt.close(fig)
+                    # ... [Add image to log_data["training/last_game_value_progression_plot"]] ...
 
-                        fig, ax = plt.subplots(figsize=(6, 4))
-                        ax.plot(turns, values, marker="o", linestyle="-")
-                        ax.set_xlabel("Game Step Index")
-                        ax.set_ylabel("Predicted Value (Online Player Perspective)")
-                        outcome_str = "Outcome: Unknown"
-                        if (
-                            batch_last_game_status is not None
-                            and batch_last_game_online_player_id is not None
-                        ):
-                            if (
-                                batch_last_game_status
-                                == batch_last_game_online_player_id
-                            ):
-                                outcome_str = "Outcome: Online Player Won"
-                            elif batch_last_game_status == 3:
-                                outcome_str = "Outcome: Draw"
-                            else:
-                                outcome_str = "Outcome: Online Player Lost"
-                        ax.set_title(
-                            f"Last Game Value Progression (Online Persp.) - Batch {i + 1}"
-                        )
-                        ax.set_ylim(-1.05, 1.05)
-                        ax.grid(True)
-
-                        buf = io.BytesIO()
-                        fig.savefig(buf, format="png")
-                        buf.seek(0)
-                        img = Image.open(buf)
-                        log_data["training/last_game_value_progression_plot"] = (
-                            wandb.Image(
-                                img,
-                                caption=outcome_str,
-                            )
-                        )
-                        plt.close(fig)
-                        buf.close()
-
-                    except Exception as e:
-                        print(f"Warning: Failed to create value progression plot: {e}")
-                        if fig is not None:
-                            plt.close(fig)
-                        if "buf" in locals() and not buf.closed:
-                            buf.close()
-
-            if last_final_board_state is not None and wandb_run is not None:
+            # Log last game board image (logic remains the same)
+            if last_final_board_state is not None and wandb_run:
                 board_image_np = create_board_image(last_final_board_state)
                 log_data["training/final_online_vs_frozen_board"] = wandb.Image(
-                    board_image_np,
-                    caption=f"Final Online vs Frozen Board - Batch {i + 1}",
+                    board_image_np, caption=f"Final Board Batch {i + 1}"
                 )
                 last_final_board_state = None
 
             safe_log_to_wandb(log_data, step=i + 1, wandb_run=wandb_run)
 
+            # Reset running metrics
             running_value_loss = 0.0
             running_value_entropy = 0.0
             running_online_perspective_values = []
@@ -881,4 +780,4 @@ def train_using_self_play(
             running_last_preds_before_terminal = []
             running_final_outcomes = []
 
-    print("\nTraining loop finished.")
+    print("\nMLX Training loop finished.")

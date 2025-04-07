@@ -1,10 +1,12 @@
-import torch
+import mlx.core as mx
+import mlx.nn as nn
 import wandb
 from .model import ValueModel
 from .self_play import train_using_self_play
 import signal
 import os
 import copy
+from mlx.utils import tree_flatten
 
 # Flag to track if wandb run was finished by signal handler - REMOVED
 # _wandb_run_finished_by_handler = False
@@ -27,10 +29,9 @@ if __name__ == "__main__":
         "load_model": True,  # Load pre-existing value model weights
         "save_model": True,  # Save value model locally
         "use_wandb": True,
-        # --- Removed policy_model_path ---
-        "value_model_path": "value_model.pth",  # Path for FROZEN value model
-        # --- Removed online_policy_model_path ---
-        "online_value_model_path": "online_value_model.pth",  # Path for ONLINE value model
+        # --- Updated paths for MLX weights ---
+        "value_model_path": "frozen_value_model.safetensors",  # Path for FROZEN value model
+        "online_value_model_path": "online_value_model.safetensors",  # Path for ONLINE value model
         # --- Evaluation & Target Update ---
         "target_update_freq": 100,
         "eval_games": 1000,
@@ -42,62 +43,75 @@ if __name__ == "__main__":
             7,
             10,
         ],  # List of depths for Minimax evaluation
-        "force_replace_model": False,  # Now controls replacement of frozen value model
+        "force_replace_model": False,  # Controls replacement of frozen value model
     }
 
-    # Initialize the online value model
-    # --- Removed policy_model = DecisionModel() ---
+    # Initialize the online value model (MLX)
     value_model = ValueModel()
 
-    # Initialize the target value models as copies of the online models
-    # --- Removed target_policy_model = copy.deepcopy(policy_model) ---
-    target_value_model = copy.deepcopy(value_model)
+    # Initialize the target value model (MLX)
+    target_value_model = ValueModel()
+    # Ensure target starts with same structure, weights will be copied/loaded later
+    # No need to freeze params explicitly in MLX in the same way as PyTorch;
+    # gradients won't be computed for it unless it's part of the grad calculation.
 
-    # Freeze target network parameters
-    # --- Removed target_policy_model loop ---
-    for param in target_value_model.parameters():
-        param.requires_grad = False
-
-    # Load the weights from the previous run if file exists (loads into ONLINE value model)
+    # Load the weights from the previous run if file exists (loads into ONLINE model)
+    loaded_weights = False
     if hyperparams["load_model"]:
-        # --- Removed policy model loading ---
-        if os.path.exists(hyperparams["value_model_path"]):
-            print(f"Loading online value model from {hyperparams['value_model_path']}")
-            # Load into the active online model
-            value_model.load_state_dict(torch.load(hyperparams["value_model_path"]))
+        frozen_path = hyperparams["value_model_path"]
+        if os.path.exists(frozen_path):
+            print(f"Loading online value model from {frozen_path}")
+            try:
+                # Load weights into the active online model using MLX load_weights
+                value_model.load_weights(frozen_path)
+                mx.eval(value_model.parameters())  # Ensure weights are loaded
+                loaded_weights = True
+                print(
+                    f"Successfully loaded weights into online model from {frozen_path}"
+                )
+            except Exception as e:
+                print(f"Error loading weights from {frozen_path}: {e}. Starting fresh.")
         else:
             print(
-                f"Frozen value model file not found at {hyperparams['value_model_path']}, starting fresh."
+                f"Frozen value model file not found at {frozen_path}, starting fresh."
             )
 
-        # Ensure target network starts with the same weights as the loaded online network
-        # --- Removed target_policy_model load_state_dict ---
-        target_value_model.load_state_dict(value_model.state_dict())
+    # Ensure target network starts with the same weights as the online network
+    # (either freshly initialized or loaded)
+    target_value_model.update(value_model.parameters())  # Copy parameters using update
+    mx.eval(target_value_model.parameters())  # Ensure update
+    if loaded_weights:
         print("Target value network initialized with loaded online network weights.")
+    else:
+        print("Target value network initialized with fresh online network weights.")
 
     # Initialize wandb
     run = None
     if hyperparams["use_wandb"]:
         run = wandb.init(
-            project="connect_four_value_based",  # Changed project name
+            project="connect_four_mlx_value_based",  # Updated project name
             config=hyperparams,
-            save_code=True,  # Keep saving code automatically
-            # `settings=wandb.Settings(job_source="code")` might be needed depending on wandb version/setup
+            save_code=True,
         )
-        # --- Removed policy_model watch ---
-        wandb.watch(
-            value_model,
-            log="all",
-            log_freq=hyperparams["log_interval"] * hyperparams["batch_size"],
-        )
+        # wandb.watch is typically PyTorch-specific. Monitoring gradients/params might need manual logging.
+        print("wandb.watch is not used for MLX models.")
+        # wandb.watch(
+        #     value_model, # This likely won't work directly with MLX model
+        #     log="all",
+        #     log_freq=hyperparams["log_interval"] * hyperparams["batch_size"],
+        # )
 
-    # Count the number of parameters in the models
-    # --- Removed policy_params ---
-    value_params = sum(p.numel() for p in value_model.parameters() if p.requires_grad)
-    # --- Removed Policy Model Parameter print ---
-    print(f"Value Model Parameters: {value_params:,}")
+    # Count the number of parameters in the models using MLX properties
+    # value_params = value_model.num_params # Incorrect - num_params is not a direct attribute
+    # Correct MLX way: flatten the parameter tree and sum the size of leaves
+    param_tree = value_model.parameters()
+    param_list = tree_flatten(param_tree)
+    value_params = sum(
+        p.size for _, p in param_list
+    )  # Sum sizes of arrays in flattened list
+
+    print(f"Value Model Parameters (MLX): {value_params:,}")
     if hyperparams["use_wandb"] and run:
-        # --- Removed policy_params summary ---
         wandb.summary["value_params"] = value_params
 
     # Add signal handler for graceful shutdown
@@ -111,15 +125,14 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
 
     ###########################################################################
-    # TRAINING
+    # TRAINING (Using MLX models and functions)
     ###########################################################################
 
     try:
-        # train the models using self-play with target networks (Value-Based)
+        # Train the models using self-play with target networks (MLX Value-Based)
         train_using_self_play(
-            # --- Removed policy models ---
-            value_model,
-            target_value_model,  # Pass target value model
+            value_model=value_model,  # Pass MLX model
+            frozen_value_model=target_value_model,  # Pass MLX model
             iterations=hyperparams["iterations"],
             batch_size=hyperparams["batch_size"],
             log_interval=hyperparams["log_interval"],
@@ -150,26 +163,21 @@ if __name__ == "__main__":
         print("\nTraining finished or stopped. Proceeding with cleanup...")
 
         if hyperparams["save_model"]:
-            print("Saving final frozen and online value models locally...")
-            # Save FROZEN value model locally
+            print("Saving final frozen and online value models (MLX weights)...")
+            frozen_path = hyperparams["value_model_path"]
+            online_path = hyperparams["online_value_model_path"]
+
+            # Save FROZEN value model locally using MLX save_weights
             try:
-                torch.save(
-                    target_value_model.state_dict(), hyperparams["value_model_path"]
-                )
-                print(
-                    f"Frozen value model saved locally to {hyperparams['value_model_path']}"
-                )
+                target_value_model.save_weights(frozen_path)
+                print(f"Frozen value model saved locally to {frozen_path}")
             except Exception as e:
                 print(f"Error saving frozen model locally: {e}")
 
-            # Save ONLINE value model locally
+            # Save ONLINE value model locally using MLX save_weights
             try:
-                torch.save(
-                    value_model.state_dict(), hyperparams["online_value_model_path"]
-                )
-                print(
-                    f"Online value model saved locally to {hyperparams['online_value_model_path']}"
-                )
+                value_model.save_weights(online_path)
+                print(f"Online value model saved locally to {online_path}")
             except Exception as e:
                 print(f"Error saving online model locally: {e}")
 
@@ -177,41 +185,44 @@ if __name__ == "__main__":
             if hyperparams["use_wandb"] and run:
                 print("Logging final models as W&B Artifacts...")
                 try:
-                    # Create artifact for the frozen model if it exists
-                    if os.path.exists(hyperparams["value_model_path"]):
+                    # Create artifact for the frozen model (.safetensors)
+                    if os.path.exists(frozen_path):
                         frozen_artifact = wandb.Artifact(
-                            "frozen_value_model",
+                            "frozen_value_model",  # Keep consistent name
                             type="model",
-                            description="Final frozen value model state dict",
-                            metadata=hyperparams,  # Optional: Add hyperparams for context
+                            description="Final frozen MLX value model weights (.safetensors)",
+                            metadata=hyperparams,
                         )
-                        frozen_artifact.add_file(hyperparams["value_model_path"])
+                        frozen_artifact.add_file(frozen_path)
                         run.log_artifact(frozen_artifact)
-                        print(f"Logged '{frozen_artifact.name}' artifact.")
+                        print(
+                            f"Logged '{frozen_artifact.name}' artifact ({frozen_path})."
+                        )
                     else:
                         print(
-                            f"Skipping frozen model artifact logging: File not found at {hyperparams['value_model_path']}"
+                            f"Skipping frozen model artifact logging: File not found at {frozen_path}"
                         )
 
-                    # Create artifact for the online model if it exists
-                    if os.path.exists(hyperparams["online_value_model_path"]):
+                    # Create artifact for the online model (.safetensors)
+                    if os.path.exists(online_path):
                         online_artifact = wandb.Artifact(
-                            "online_value_model",
+                            "online_value_model",  # Keep consistent name
                             type="model",
-                            description="Final online value model state dict",
-                            metadata=hyperparams,  # Optional: Add hyperparams for context
+                            description="Final online MLX value model weights (.safetensors)",
+                            metadata=hyperparams,
                         )
-                        online_artifact.add_file(hyperparams["online_value_model_path"])
+                        online_artifact.add_file(online_path)
                         run.log_artifact(online_artifact)
-                        print(f"Logged '{online_artifact.name}' artifact.")
+                        print(
+                            f"Logged '{online_artifact.name}' artifact ({online_path})."
+                        )
                     else:
                         print(
-                            f"Skipping online model artifact logging: File not found at {hyperparams['online_value_model_path']}"
+                            f"Skipping online model artifact logging: File not found at {online_path}"
                         )
 
                 except Exception as e:
                     print(f"Error logging model artifacts to W&B: {e}")
-
         else:
             print("Local saving skipped as save_model is False.")
 

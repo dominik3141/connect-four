@@ -1,201 +1,219 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.distributions import Categorical
+import mlx.core as mx
+import mlx.nn as nn
+import random  # Use standard library random for epsilon-greedy choice
 from .engine import ConnectFour, Move, is_legal, make_move
-import random
 from typing import Tuple, List, Optional
-from torch import Tensor
 
 
-def who_is_next(board: torch.Tensor) -> torch.Tensor:
-    """
-    Return the player who is next to move for each board in the batch.
-    Expects input shape (batch_size, 7 * 6 * 2) from concatenated P1/P2 boards.
-    """
-    # Input 'board' here is already processed (P1 planes + P2 planes)
-    # Count non-zero entries (pieces) across both player planes
-    num_pieces = (board != 0).sum(dim=-1)
-    # Player 1 moves on even turns (0, 2, 4...), Player 2 on odd turns (1, 3, 5...)
-    is_player1_next = (num_pieces % 2 == 0).float()
-    # Convert to 1 for player 1, 2 for player 2
-    return is_player1_next + (1 - is_player1_next) * 2
-
-
-def board_to_tensor(board: ConnectFour) -> Tensor:
-    """Convert a ConnectFour board to a tensor representation consistent with model expectations."""
-    # Convert numpy array to tensor
-    tensor = torch.from_numpy(board.state).float()
-    # Transpose is NO LONGER needed if models expect 6x7 directly?
-    # Let's check ValueModel input processing. It uses view(-1, 7, 6) which implies input should be 7x6.
-    # So, the transpose IS needed here.
-    tensor = tensor.t()  # transpose to get 7x6
-    return tensor.contiguous()
+def board_to_tensor(board: ConnectFour) -> mx.array:
+    """Convert a ConnectFour board to an mlx array representation."""
+    # Convert numpy array to mlx array
+    tensor = mx.array(board.state, dtype=mx.float32)
+    # Models expect 7x6 (Channels-first convention isn't typical here)
+    tensor = mx.transpose(tensor, (1, 0))  # transpose to get 7x6
+    return tensor  # No contiguous needed for MLX
 
 
 def get_next_value_based_move(
-    value_model: "ValueModel",  # Forward reference ValueModel
+    value_model: "ValueModel",
     board: ConnectFour,
     current_player: int,
     temperature: float = 0.01,
     epsilon: float = 0.0,
-) -> Tuple[Move, Tensor, Tensor, float, Tensor]:
+) -> Tuple[Move, mx.array, mx.array, float, mx.array]:
     """
-    Selects the next move based on the ValueModel's evaluation of subsequent states.
+    Selects the next move based on the ValueModel's evaluation using MLX.
 
-    Evaluates all legal moves, calculates the expected value V(S', P) for the *current player*
-    in the state S' resulting from each move, and chooses based on these values using
-    temperature-scaled softmax sampling or epsilon-greedy exploration.
+    Evaluates legal moves, calculates V(S', P) for the current player in the
+    resulting state S', and chooses using temperature-scaled sampling or epsilon-greedy.
 
     Returns:
         - The chosen move (Move).
-        - The probability of choosing that move under the actual policy (using input temperature/epsilon) (Tensor).
-        - The probabilities of all legal moves under the actual policy (Tensor).
+        - The probability of choosing that move under the actual policy (mx.array scalar).
+        - The probabilities of all legal moves under the actual policy (mx.array).
         - The entropy of the actual move selection distribution (float).
-        - The probability of choosing that move under a temp=1 policy (Tensor).
+        - The probability of choosing that move under a temp=1 policy (mx.array scalar).
     """
     legal_moves: List[Move] = [col for col in range(7) if is_legal(board, col)]
 
     if not legal_moves:
-        # Should only happen in a full board (stalemate) situation handled before calling this
         raise ValueError("No legal moves available to evaluate.")
 
-    next_state_values = []
-    device = next(value_model.parameters()).device  # Get model device
+    next_state_values_list = []  # Use list to collect scalars/arrays before converting
 
     # Evaluate the value of each possible next state for the *current* player
-    with torch.no_grad():
-        for move in legal_moves:
-            next_board = make_move(board, current_player, move)
-            next_board_tensor = board_to_tensor(next_board).to(device)
-            # Get value V(S', P) where S' is next state, P is current player
-            value = value_model(next_board_tensor, current_player)
-            next_state_values.append(value.item())  # Store scalar value
+    # MLX evaluation is often done outside explicit no_grad contexts
+    for move in legal_moves:
+        next_board = make_move(board, current_player, move)
+        # Pass player explicitly now, model handles perspective
+        value = value_model(board_to_tensor(next_board), current_player)
+        next_state_values_list.append(value.item())  # Get scalar value
 
-    values_tensor = torch.tensor(next_state_values, device=device)
+    values_tensor = mx.array(next_state_values_list)
 
-    # --- Calculate Temp=1 probabilities (for reporting/analysis) ---
-    temp_1_probs = F.softmax(values_tensor, dim=0)
-    temp_1_move_prob: Optional[Tensor] = None  # Initialize
+    # --- Calculate Temp=1 probabilities ---
+    # Use mx.softmax
+    temp_1_probs = mx.softmax(values_tensor, axis=0)
+    temp_1_move_prob: Optional[mx.array] = None
 
     # --- Determine chosen move and actual selection probabilities ---
     chosen_move: Move
-    move_prob: Tensor
-    probs: Tensor
+    move_prob: mx.array
+    probs: mx.array
     entropy: float
-    chosen_move_idx: int  # Index within legal_moves
+    chosen_move_idx: int
 
     if temperature <= 0:  # Greedy selection
-        chosen_move_idx = torch.argmax(values_tensor).item()
+        chosen_move_idx = mx.argmax(values_tensor).item()
         chosen_move = legal_moves[chosen_move_idx]
-        probs = torch.zeros(len(legal_moves), device=device)
-        probs[chosen_move_idx] = 1.0
-        move_prob = torch.tensor(1.0, device=device)
-        entropy = 0.0
+        # Create probability distribution for greedy choice
+        probs = mx.zeros_like(values_tensor)
+        # MLX array update needs care, direct indexing might not work as expected for assignment
+        # Let's create it correctly:
+        one_hot = mx.zeros_like(values_tensor)
+        one_hot[chosen_move_idx] = 1.0
+        probs = one_hot
+        move_prob = mx.array(1.0)
+        entropy = 0.0  # Entropy of a deterministic distribution is 0
     else:
         # Apply actual temperature
         scaled_values = values_tensor / temperature
-        probs = F.softmax(scaled_values, dim=0)
-        distribution = Categorical(probs=probs)
-        entropy = distribution.entropy().item()
+        probs = mx.softmax(scaled_values, axis=0)  # Softmax probabilities
 
-        if random.random() < epsilon:
-            chosen_move = random.choice(legal_moves)
-            chosen_move_idx = legal_moves.index(chosen_move)
+        # Calculate entropy using MLX operations
+        # entropy = - sum(p * log(p))
+        # Add small epsilon to prevent log(0)
+        log_probs = mx.log(probs + 1e-9)
+        entropy = -mx.sum(probs * log_probs).item()
+
+        # Epsilon-greedy or sampling
+        use_random_move = random.random() < epsilon  # Standard random float generation
+        if use_random_move:
+            # Epsilon step: Choose a random legal move
+            chosen_move_idx = random.randint(
+                0, len(legal_moves) - 1
+            )  # Use standard random for index, no .item() needed
+            chosen_move = legal_moves[chosen_move_idx]
+            # The probability of *this specific* move under the softmax policy
             move_prob = probs[chosen_move_idx]
         else:
-            chosen_move_idx = distribution.sample().item()
+            # Sampling step: Sample from the softmax distribution
+            # Use mlx.random.categorical
+            # Ensure probs are on CPU for numpy conversion if needed by categorical, or use mx native
+            # mlx.random.categorical expects log-probabilities or logits usually. Let's use logits.
+            # We already have probs, let's sample using indices and probabilities
+            # Probs might sum slightly off 1.0 due to float precision, normalize
+            probs_normalized = probs / mx.sum(probs)
+            # Generate random number and find corresponding bin
+            # Alternatively, use mx.random.categorical directly if it accepts probs (check docs)
+            # Assuming mx.random.categorical works like torch.multinomial:
+            # It expects logits (unnormalized log probs). scaled_values are logits.
+            chosen_move_idx_tensor = mx.random.categorical(
+                scaled_values
+            )  # Use mx.random.categorical
+            chosen_move_idx = chosen_move_idx_tensor.item()
             chosen_move = legal_moves[chosen_move_idx]
-            move_prob = probs[chosen_move_idx]
+            move_prob = probs[chosen_move_idx]  # Prob of the sampled move
 
     # --- Get the Temp=1 probability for the *actual* chosen move ---
-    temp_1_move_prob = temp_1_probs[chosen_move_idx]
+    temp_1_move_prob = temp_1_probs[chosen_move_idx]  # Indexing is fine here
 
     # Map actual probabilities back to all 7 columns
-    full_probs = torch.zeros(7, device=device)
+    full_probs = mx.zeros(7)
+    # Create indices array and update in one go if possible, or loop
+    indices = mx.array(legal_moves)
+    # mx.scatter might be the way, but a loop is simpler for now
+    current_full_probs_list = full_probs.tolist()
     for i, move in enumerate(legal_moves):
-        full_probs[move] = probs[i]
+        current_full_probs_list[move] = probs[i].item()
+    full_probs = mx.array(current_full_probs_list)
 
-    # Ensure temp_1_move_prob is not None before returning
     if temp_1_move_prob is None:
-        # This should be unreachable if legal_moves is not empty
         raise RuntimeError("temp_1_move_prob was not assigned.")
 
+    # Return mx.arrays where appropriate
     return chosen_move, move_prob, full_probs, entropy, temp_1_move_prob
 
 
+# --- Updated ValueModel using MLX ---
 class ValueModel(nn.Module):
     """
-    A model that takes a board state and a player (1 or 2) and returns that player's expected value
-    for the game outcome, using rewards {Win: 1, Draw: 0, Loss: -1}. Output is bounded to [-1, 1] via tanh.
+    MLX model: board state + player -> expected value [-1, 1].
+    Input: (N, 7, 6) board tensor, player ID (1 or 2).
     """
 
     def __init__(self):
-        super(ValueModel, self).__init__()
-        # Input: 7x6 board state -> flattened 42 features.
-        # Represent as two planes (player 1 presence, player 2 presence) -> 42 * 2 = 84 features.
-        # Add one feature for the current player whose turn it is. Total: 85 features.
+        super().__init__()
+        # Input: 7x6 board -> two 7x6 planes -> flattened 84 features + 1 player feature = 85
         self.lin = nn.Sequential(
-            nn.Linear(7 * 6 * 2 + 1, 512),  # Input size confirmed: 84 + 1 = 85
+            nn.Linear(7 * 6 * 2 + 1, 512),  # Input size 85
             nn.ReLU(),
             nn.Linear(512, 256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Linear(128, 1),
-            nn.Tanh(),
+            nn.Tanh(),  # Keep Tanh for [-1, 1] output
         )
 
-    def forward(self, x: torch.Tensor, player: int) -> torch.Tensor:
+    def __call__(self, x: mx.array, player: int) -> mx.array:
         """
-        Evaluates the board state `x` from the perspective of `player`.
+        Evaluates board state `x` for `player` using MLX.
 
         Args:
-            x: The board state tensor, expected shape (N, 7, 6) or (7, 6).
-               Represents the board with 0=empty, 1=P1, 2=P2.
-            player: The player (1 or 2) whose perspective the value should be calculated from.
+            x: Board state tensor (N, 7, 6) or (7, 6). 0=empty, 1=P1, 2=P2.
+            player: Player (1 or 2) perspective.
 
         Returns:
-            A tensor representing the expected value V(x, player), bounded between -1 and 1.
+            Expected value V(x, player) as mx.array (N, 1).
         """
-        # Ensure input has batch dimension
-        if x.dim() == 2:
-            x = x.unsqueeze(0)  # Add batch dimension: (1, 7, 6)
+        # Ensure batch dimension
+        if x.ndim == 2:
+            x = mx.expand_dims(x, axis=0)  # (1, 7, 6)
 
-        # Create separate binary planes for each player
-        player1_board = (x == 1).float().view(x.size(0), -1)  # (N, 42)
-        player2_board = (x == 2).float().view(x.size(0), -1)  # (N, 42)
-        processed_x = torch.cat([player1_board, player2_board], dim=-1)  # (N, 84)
+        # Create player planes
+        player1_board = mx.reshape(
+            (x == 1).astype(mx.float32), (x.shape[0], -1)
+        )  # (N, 42)
+        player2_board = mx.reshape(
+            (x == 2).astype(mx.float32), (x.shape[0], -1)
+        )  # (N, 42)
+        processed_x = mx.concatenate([player1_board, player2_board], axis=-1)  # (N, 84)
 
-        # Determine the player whose turn it *actually* is on the board state `x`
-        # Count pieces: P1 moves on even total pieces, P2 on odd
-        num_pieces = (x != 0).view(x.size(0), -1).sum(dim=1)  # (N,)
-        is_p1_turn = (num_pieces % 2 == 0).float()  # (N,)
+        # Determine current turn player indicator (as in PyTorch version)
+        num_pieces = mx.sum(mx.reshape(x != 0, (x.shape[0], -1)), axis=1)  # (N,)
+        is_p1_turn = (num_pieces % 2 == 0).astype(mx.float32)  # (N,)
         current_turn_player_indicator = (
-            is_p1_turn * 1.0 + (1 - is_p1_turn) * 2.0
-        )  # (N,), values are 1.0 or 2.0
+            is_p1_turn * 1.0 + (1.0 - is_p1_turn) * 2.0
+        )  # (N,) values 1.0 or 2.0
 
-        # Add the current turn player indicator as a feature
-        processed_x = torch.cat(
-            [processed_x, current_turn_player_indicator.unsqueeze(1)], dim=-1
+        # Add indicator as feature
+        processed_x = mx.concatenate(
+            [processed_x, mx.expand_dims(current_turn_player_indicator, axis=1)],
+            axis=-1,
         )  # (N, 85)
 
-        # Calculate the value using the network. This value is implicitly V(x, 1)
-        # because the network architecture doesn't explicitly use the 'player' argument yet.
-        # Let's assume the network learns V(x, current_turn_player).
+        # Get value from network V(x, current_turn_player)
         value_from_model = self.lin(processed_x)  # (N, 1)
 
-        # Now, adjust the sign based on the 'player' argument requested by the caller.
-        # We want V(x, player). The model gives V(x, current_turn_player).
-        # If player == current_turn_player, return value_from_model.
-        # If player != current_turn_player, return -value_from_model (zero-sum assumption).
-        player_tensor = torch.full_like(
-            current_turn_player_indicator, float(player)
-        )  # (N,)
-        sign_multiplier = torch.where(
-            player_tensor == current_turn_player_indicator, 1.0, -1.0
+        # Adjust sign based on requested 'player' perspective (zero-sum)
+        # player_tensor = mx.full_like(current_turn_player_indicator, float(player)) # Incorrect: mx.full_like doesn't exist
+        # Create tensor with the same shape/dtype as current_turn_player_indicator, filled with player value
+        player_tensor = mx.full(
+            current_turn_player_indicator.shape,
+            float(player),
+            dtype=current_turn_player_indicator.dtype,
         )  # (N,)
 
-        final_value = value_from_model * sign_multiplier.unsqueeze(1)  # (N, 1)
+        # Use mx.where for conditional sign multiplier
+        sign_multiplier = mx.where(
+            player_tensor == current_turn_player_indicator,
+            mx.array(1.0),
+            mx.array(-1.0),
+        )  # (N,)
+
+        final_value = value_from_model * mx.expand_dims(
+            sign_multiplier, axis=1
+        )  # (N, 1)
 
         return final_value
