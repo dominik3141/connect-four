@@ -89,3 +89,4 @@ The goal is to train a neural network (a "Value Model") to evaluate Connect Four
 ## Future Work / Potential Improvements
 
 - Implement AlphaZero version to compare parameter size necessary for perfect play.
+- Sequential game play is inefficient. Play multiple games in parallel to run more efficient inference.
